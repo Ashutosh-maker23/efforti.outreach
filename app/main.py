@@ -30,8 +30,8 @@ from .importer import import_csv
 from .research import research_companies
 from .models import (Enrollment, Event, Lead, Mailbox, Message, SessionLocal,
                      Sequence, SequenceStep, Suppression, init_db, log, utcnow)
-from .scheduler import (due_counts, poll_inboxes, poll_now, process_due_sends,
-                        send_due_now, send_enrollment_step, weekly_counter_decay)
+from .scheduler import (poll_inboxes, poll_now, process_due_sends,
+                        send_enrollment_step, weekly_counter_decay)
 from .seed import seed_default_sequence
 
 # On sleep-prone hosts (e.g. Render free tier) the background sender can't be
@@ -107,17 +107,10 @@ def switch_mailbox(request: Request, mailbox_id: str = Form("")):
 
 # ---------------- Dashboard ----------------
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, sent: int = -1, capped: int = 0,
-              suppressed: int = 0, nomb: int = 0, failed: int = 0,
-              polled: int = 0, pollskip: int = 0):
+def dashboard(request: Request, polled: int = 0, pollskip: int = 0):
     db = SessionLocal()
     try:
         mb = active_mailbox(request, db)
-        send_result = None
-        if sent >= 0:
-            send_result = {"sent": sent, "capped": capped,
-                           "suppressed": suppressed, "no_mailbox": nomb,
-                           "failed": failed}
         recent_q = db.query(Event).order_by(Event.id.desc())
         replies_q = db.query(Event).filter(Event.kind == "reply") \
                       .order_by(Event.id.desc())
@@ -161,9 +154,8 @@ def dashboard(request: Request, sent: int = -1, capped: int = 0,
         return templates.TemplateResponse(request, "dashboard.html", ctx(
             request, db, active_mb=mb, funnel=funnel, sent_total=sent_total,
             bounced=bounced, unsubbed=unsubbed, mailboxes=mailboxes,
-            recent=recent, replies=replies, due=due_counts(db),
-            manual_mode=MANUAL_SEND_ONLY,
-            send_result=send_result, polled=polled, pollskip=pollskip))
+            recent=recent, replies=replies,
+            polled=polled, pollskip=pollskip))
     finally:
         db.close()
 
@@ -175,6 +167,21 @@ def _step_label(i, short=False):
     if i == 0:
         return "First" if short else "First email"
     return f"F{i}" if short else f"Follow-up {i}"
+
+
+def _primary_enrollment(db, lead_id):
+    """A lead's authoritative active enrollment. Normally there's exactly one,
+    but a lead can accumulate several (re-enrolled, or an early send that failed
+    and was retried) — the real thread is the one that has advanced furthest, so
+    order by current_step (then id). Every path that reads a lead's progress or
+    continues its thread MUST agree on this pick; otherwise the 'next step'
+    button and the send-time order check disagree and the click silently no-ops
+    as 'out_of_order'."""
+    return (db.query(Enrollment)
+            .filter(Enrollment.lead_id == lead_id,
+                    Enrollment.status == "active")
+            .order_by(Enrollment.current_step.desc(), Enrollment.id.desc())
+            .first())
 
 
 def _lead_progress(db, leads):
@@ -192,7 +199,14 @@ def _lead_progress(db, leads):
               .filter(Enrollment.lead_id.in_(ids),
                       Enrollment.status == "active")
               .order_by(Enrollment.id).all()):
-        enr_by_lead[e.lead_id] = e            # keep the latest active one
+        # Pick the furthest-along active enrollment — same rule as
+        # _primary_enrollment — so 'next' lines up with the sent badges. Using
+        # the highest current_step (ties -> highest id) guarantees 'next' is
+        # exactly one past the last sent step, so a sent step is never also
+        # shown as the next actionable one.
+        cur = enr_by_lead.get(e.lead_id)
+        if cur is None or e.current_step >= cur.current_step:
+            enr_by_lead[e.lead_id] = e
     sent = {}
     for m in (db.query(Message.lead_email, Message.step_index)
               .filter(Message.lead_email.in_(emails),
@@ -242,10 +256,7 @@ def _ensure_enrollment(db, lead, mailbox):
     """Get this lead's active enrollment, creating one (auto-enroll into the
     default sequence) the first time you send to a not-yet-enrolled lead — so
     the user never has to run a separate 'enroll' step."""
-    enr = (db.query(Enrollment)
-           .filter(Enrollment.lead_id == lead.id,
-                   Enrollment.status == "active")
-           .order_by(Enrollment.id.desc()).first())
+    enr = _primary_enrollment(db, lead.id)
     if enr:
         return enr
     seq = db.query(Sequence).filter(Sequence.active.is_(True)).first()
@@ -449,16 +460,23 @@ def enroll(request: Request, sequence_id: int = Form(...)):
         leads = db.query(Lead).filter(Lead.status == "verified").all()
         now = utcnow()
         per_day_capacity = sum(m.effective_cap() for m in mailboxes)
-        for i, lead in enumerate(leads):
-            mb = mailboxes[i % len(mailboxes)]
-            day_offset = i // max(1, per_day_capacity)
+        enrolled = 0
+        for lead in leads:
+            # Never open a second active thread for a lead that already has one —
+            # duplicate active enrollments make the scheduler send follow-ups
+            # multiple times and desync the 'next step' shown on the Leads page.
+            if _primary_enrollment(db, lead.id):
+                continue
+            mb = mailboxes[enrolled % len(mailboxes)]
+            day_offset = enrolled // max(1, per_day_capacity)
             db.add(Enrollment(
                 lead_id=lead.id, sequence_id=seq.id, mailbox_id=mb.id,
                 next_send_at=now + timedelta(days=day_offset,
                                              minutes=random.randint(0, 120)),
             ))
             lead.status = "enrolled"
-        log(db, "enroll", f"Enrolled {len(leads)} leads into '{seq.name}' "
+            enrolled += 1
+        log(db, "enroll", f"Enrolled {enrolled} leads into '{seq.name}' "
                           f"across {len(mailboxes)} mailboxes "
                           f"(~{per_day_capacity}/day capacity)")
         db.commit()
@@ -537,9 +555,7 @@ def send_selected(request: Request, step: int = Form(...), ids: str = Form(""),
             lead = db.query(Lead).get(lid)
             if not lead:
                 continue
-            existing = (db.query(Enrollment)
-                        .filter(Enrollment.lead_id == lid,
-                                Enrollment.status == "active").first())
+            existing = _primary_enrollment(db, lid)
             if existing:
                 enr = existing                  # follow-up → keep its mailbox
             else:
@@ -674,17 +690,28 @@ def mailboxes_page(request: Request, mb: str = "", who: str = ""):
 
 @app.post("/mailboxes/add")
 def add_mailbox(email: str = Form(...), display_name: str = Form(""),
-                app_password: str = Form(...), daily_cap: int = Form(25)):
+                app_password: str = Form(...), daily_cap: int = Form(25),
+                login_email: str = Form("")):
     """Verify the login actually works before saving — a wrong email or app
-    password is rejected, never stored. Only real, working mailboxes get added."""
+    password is rejected, never stored. Only real, working mailboxes get added.
+
+    `login_email` is optional: set it when `email` is a Gmail 'Send mail as'
+    alias with no login of its own — it's the real account we authenticate as
+    (using that account's one app password), while mail still goes out From the
+    alias address."""
     db = SessionLocal()
     try:
         email = email.strip().lower()
-        pw = app_password.strip()
+        # Google shows the 16-char app password in 4 space-separated groups for
+        # readability; the spaces aren't part of the secret. Strip ALL whitespace
+        # so pasting it either way ("abcd efgh…" or "abcdefgh…") always works.
+        pw = "".join(app_password.split())
+        login = login_email.strip().lower() or email
         who = f"&who={email}"
         if db.query(Mailbox).filter(Mailbox.email == email).first():
             return RedirectResponse(f"/mailboxes?mb=dup{who}", status_code=303)
-        ok, reason = verify_credentials(email, pw)
+        # Authenticate as the real account (login), not necessarily the From.
+        ok, reason = verify_credentials(login, pw)
         if not ok:
             code = "auth" if reason in ("bad_auth", "bad_auth_imap", "missing") \
                 else "conn"
@@ -693,10 +720,57 @@ def add_mailbox(email: str = Form(...), display_name: str = Form(""),
             return RedirectResponse(f"/mailboxes?mb={code}{who}",
                                     status_code=303)
         db.add(Mailbox(email=email, display_name=display_name.strip(),
-                       app_password=pw, daily_cap=daily_cap, sig_email=email))
-        log(db, "mailbox", f"Added mailbox {email} (login verified)")
+                       app_password=pw, daily_cap=daily_cap, sig_email=email,
+                       auth_email=(login if login != email else "")))
+        log(db, "mailbox", f"Added mailbox {email} (login verified"
+                           f"{' as ' + login if login != email else ''})")
         db.commit()
         return RedirectResponse(f"/mailboxes?mb=ok{who}", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/mailboxes/{mailbox_id}/password")
+def update_mailbox_password(mailbox_id: int, app_password: str = Form(...),
+                            login_email: str = Form("")):
+    """Replace a saved mailbox's Gmail app password, re-verifying the login
+    before storing it — the same gate `add` uses. This is the only way to fix a
+    mailbox whose stored credential is wrong (e.g. a normal account password
+    instead of a 16-char app password) without deleting it and losing its
+    sending history.
+
+    `login_email` is optional: set it when this mailbox is a Gmail 'Send mail
+    as' alias — it's the real account to authenticate as. Leave blank to log in
+    as the mailbox's own address (or to clear a previously set one)."""
+    db = SessionLocal()
+    try:
+        mb = db.query(Mailbox).get(mailbox_id)
+        if not mb:
+            return RedirectResponse("/mailboxes", status_code=303)
+        who = f"&who={mb.email}"
+        # Google shows the 16-char app password in 4 space-separated groups for
+        # readability; the spaces aren't part of the secret. Strip ALL whitespace
+        # so pasting it either way ("abcd efgh…" or "abcdefgh…") always works.
+        pw = "".join(app_password.split())
+        # A submitted sign-in account overrides; otherwise keep whatever the
+        # mailbox already had (so a plain password update doesn't lose it).
+        login = login_email.strip().lower() or mb.login_email()
+        ok, reason = verify_credentials(login, pw, mb.smtp_host,
+                                        mb.smtp_port, mb.imap_host)
+        if not ok:
+            code = "pwauth" if reason in ("bad_auth", "bad_auth_imap",
+                                          "missing") else "pwconn"
+            log(db, "mailbox",
+                f"Password update rejected for {mb.email} ({reason})")
+            db.commit()
+            return RedirectResponse(f"/mailboxes?mb={code}{who}",
+                                    status_code=303)
+        mb.app_password = pw
+        mb.auth_email = login if login != mb.email else ""
+        log(db, "mailbox", f"App password updated for {mb.email} (login "
+                           f"verified{' as ' + login if login != mb.email else ''})")
+        db.commit()
+        return RedirectResponse(f"/mailboxes?mb=pwok{who}", status_code=303)
     finally:
         db.close()
 
@@ -723,6 +797,7 @@ _LOGO_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/gif"}
 
 @app.post("/mailboxes/{mailbox_id}/signature")
 async def update_signature(mailbox_id: int, signature_on: str = Form(""),
+                           display_name: str = Form(""),
                            sig_title: str = Form(""), sig_company: str = Form(""),
                            sig_phone: str = Form(""), sig_email: str = Form(""),
                            remove_logo: str = Form(""),
@@ -736,6 +811,9 @@ async def update_signature(mailbox_id: int, signature_on: str = Form(""),
             return RedirectResponse("/mailboxes", status_code=303)
         who = f"&who={mb.email}"
         mb.signature_on = (signature_on == "on")
+        # The name in the signature IS the mailbox display name (also the sender
+        # name on the From: line), so it's editable right here.
+        mb.display_name = display_name.strip()
         mb.sig_title = sig_title.strip()
         mb.sig_company = sig_company.strip()
         mb.sig_phone = sig_phone.strip()
@@ -812,19 +890,7 @@ def unsubscribe(token: str):
         db.close()
 
 
-# ---------------- Manual triggers (the primary way to send) ----------------
-@app.post("/run/sends")
-def trigger_sends():
-    """Send every email that's due right now — first touches and follow-ups —
-    in one batch. Caps and suppression still apply. Returns to the dashboard
-    with a summary of what went out."""
-    s = send_due_now()
-    return RedirectResponse(
-        f"/?sent={s['sent']}&capped={s['capped']}&suppressed={s['suppressed']}"
-        f"&nomb={s['no_mailbox']}&failed={s['failed']}",
-        status_code=303)
-
-
+# ---------------- Manual triggers ----------------
 @app.post("/run/poll")
 def trigger_poll():
     """Manually check every mailbox for replies and bounces (live mode only)."""

@@ -24,6 +24,12 @@ class Mailbox(Base):
     smtp_port = Column(Integer, default=587)
     imap_host = Column(String, default="imap.gmail.com")
     app_password = Column(String, nullable=False)  # Gmail app password
+    # SMTP/IMAP login address. Blank = log in as `email` (the normal case). When
+    # `email` is a Gmail "Send mail as" ALIAS (no login of its own), set this to
+    # the real Google account that owns the alias — e.g. email=you@alias.com,
+    # auth_email=you@realaccount.com. We authenticate as auth_email but keep the
+    # From: header as `email`, which Gmail allows for a verified alias.
+    auth_email = Column(String, default="")
     daily_cap = Column(Integer, default=25)        # hard ceiling per day
     warmup_start = Column(Integer, default=8)      # day-1 volume
     warmup_step = Column(Integer, default=2)       # +N per day until cap
@@ -43,6 +49,11 @@ class Mailbox(Base):
     sig_email = Column(String, default="")         # "Email Id" shown; blank = mailbox email
     logo_b64 = Column(Text, default="")            # inline logo, base64
     logo_mime = Column(String, default="")         # e.g. "image/png"
+
+    def login_email(self) -> str:
+        """Address used to authenticate to SMTP/IMAP — the alias's real account
+        if set, otherwise the mailbox address itself."""
+        return (self.auth_email or "").strip() or self.email
 
     def sig_contact_email(self) -> str:
         return (self.sig_email or "").strip() or self.email
@@ -113,6 +124,7 @@ class Enrollment(Base):
     next_send_at = Column(DateTime, index=True)
     status = Column(String, default="active", index=True)
     # active -> finished | halted_reply | halted_bounce | halted_unsub | halted_manual
+    #        -> superseded (a duplicate active thread folded into the primary one)
     thread_message_id = Column(String, default="")  # first Message-ID for threading
     thread_subject = Column(String, default="")
     created_at = Column(DateTime, default=utcnow)
@@ -181,6 +193,7 @@ def _migrate_sqlite():
     tables = set(insp.get_table_names())
     adds_by_table = {
         "mailboxes": {
+            "auth_email": "VARCHAR DEFAULT ''",
             "signature_on": "BOOLEAN DEFAULT 1",
             "sig_title": "VARCHAR DEFAULT ''",
             "sig_company": "VARCHAR DEFAULT ''",

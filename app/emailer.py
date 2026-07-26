@@ -14,6 +14,15 @@ from .models import Enrollment, Lead, Mailbox, Message, log, utcnow
 
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 
+# ── Brand blurb ─────────────────────────────────────────────────────────────
+# A short, consistent "about Efforti" line rendered on EVERY outbound email,
+# just below the signature and above the unsubscribe footer. THIS is the single
+# place to edit the brand paragraph — change the text here and every email
+# updates. Keep it to ~3 lines. Set BRAND_BLURB = "" to switch it off entirely.
+BRAND_BLURB = (
+    ""
+)
+
 
 def render(template_str: str, lead: Lead) -> str:
     return Template(template_str).render(
@@ -80,10 +89,16 @@ def _sig_inner_html(mailbox: Mailbox, logo_src: str) -> str:
 
     logo_cell = ""
     if logo_src:
+        # Bound BOTH dimensions so any uploaded image scales down proportionally
+        # into a tidy fixed box instead of overflowing the signature. A wide
+        # image caps at 150px across; a tall one caps at 56px high; aspect ratio
+        # is preserved (width/height auto). This same markup renders the on-page
+        # preview and the sent email, so what you see is what recipients get.
         logo_cell = (
             '<td style="vertical-align:top;padding-right:18px">'
             f'<img src="{e(logo_src)}" alt="{e(company or name or "logo")}" '
-            'style="display:block;border:0;max-height:60px;height:auto">'
+            'style="display:block;border:0;width:auto;height:auto;'
+            'max-width:150px;max-height:56px;object-fit:contain">'
             '</td>')
     rows = []
     for val in (name, title, company):
@@ -167,10 +182,20 @@ def build_email(mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
     if bcc:
         msg["Bcc"] = ", ".join(bcc)
 
-    if enrollment.current_step == 0 or not enrollment.thread_message_id:
-        msg["Subject"] = subject
+    # Threading is driven by the step's Subject: a step that carries its OWN
+    # subject opens a FRESH thread (new subject line in the inbox); a step with a
+    # blank subject is a reply ("Re:") in the current thread. That's how the
+    # sequence is designed — emails 1+2 share a thread, email 3 opens a new one
+    # (email 4 replies to it), email 5 opens the final thread. Step 0 always
+    # starts a thread, and so does any send that's somehow missing thread state.
+    starts_thread = (enrollment.current_step == 0
+                     or not enrollment.thread_message_id
+                     or bool(subject))
+    if starts_thread:
+        thread_subject = subject or enrollment.thread_subject or ""
+        msg["Subject"] = thread_subject
         enrollment.thread_message_id = msg_id
-        enrollment.thread_subject = subject
+        enrollment.thread_subject = thread_subject
     else:
         # Follow-up: same thread. Re: subject + threading headers.
         msg["Subject"] = "Re: " + (enrollment.thread_subject or subject)
@@ -184,21 +209,36 @@ def build_email(mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
     sig_text = signature_text(mailbox)
     sig_html, logo = signature_html(mailbox)
 
-    # text/plain (fallback for every client + better deliverability)
+    # text/plain (fallback for every client + better deliverability). Order:
+    # body -> signature -> brand blurb -> unsubscribe footer.
     text_footer = (f"\n\n--\nIf you'd rather not hear from me, one click opts "
                    f"you out: {unsub_url}")
-    text_body = body + (f"\n\n{sig_text}" if sig_text else "") + text_footer
+    text_body = body
+    if sig_text:
+        text_body += f"\n\n{sig_text}"
+    if BRAND_BLURB:
+        text_body += f"\n\n{BRAND_BLURB}"
+    text_body += text_footer
     msg.set_content(text_body)
 
-    # text/html (carries the branded signature + inline logo)
+    # text/html (carries the branded signature + inline logo). Same order, with
+    # the brand blurb as a subtle footer between the signature and the opt-out.
     body_html = htmllib.escape(body).replace("\n", "<br>")
+    blurb_html = ""
+    if BRAND_BLURB:
+        blurb_html = (
+            '<div style="margin-top:22px;padding-top:14px;'
+            'border-top:1px solid #ececec;font-family:Arial,Helvetica,sans-serif;'
+            'font-size:12px;color:#8a8a8a;line-height:1.5">'
+            f'{htmllib.escape(BRAND_BLURB)}</div>')
     unsub_html = (
         '<div style="color:#8a8a8a;font-size:12px;margin-top:26px">'
         f'If you\'d rather not hear from me, <a href="{htmllib.escape(unsub_url)}" '
         'style="color:#8a8a8a">one click opts you out</a>.</div>')
     html_doc = (
         '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
-        f'color:#000000;line-height:1.55">{body_html}{sig_html}{unsub_html}</div>')
+        f'color:#000000;line-height:1.55">{body_html}{sig_html}{blurb_html}'
+        f'{unsub_html}</div>')
     msg.add_alternative(html_doc, subtype="html")
 
     # Inline logo: attach it inside the HTML part (multipart/related) so the
@@ -229,7 +269,10 @@ def send(db, mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
     try:
         with smtplib.SMTP(mailbox.smtp_host, mailbox.smtp_port, timeout=30) as s:
             s.starttls()
-            s.login(mailbox.email, mailbox.app_password)
+            # Log in as the real account (login_email); for a "send mail as"
+            # alias this differs from the From address (mailbox.email), which
+            # Gmail permits because the alias is verified on that account.
+            s.login(mailbox.login_email(), mailbox.app_password)
             s.send_message(msg)      # envelope includes Cc + Bcc; Bcc header stripped
         record.status = "sent"
         db.add(record)

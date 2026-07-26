@@ -29,6 +29,21 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     <span><strong style="color:var(--bad)">Couldn't reach Gmail to verify {{f.email}}.</strong> Nothing was saved. This is usually a temporary network issue — please try again in a moment.</span>
   </div>
+  {% elif f.code == 'pwok' %}
+  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong style="color:var(--ok)">App password updated for {{f.email}}.</strong> We signed in to Gmail with the new password and it worked — this mailbox can send again.</span>
+  </div>
+  {% elif f.code == 'pwauth' %}
+  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong style="color:var(--bad)">Gmail refused that password for {{f.email}}.</strong> The old one was kept. Paste the <strong>16-character app password</strong> (Google Account → Security → 2-Step Verification → App passwords), not your normal login password.</span>
+  </div>
+  {% elif f.code == 'pwconn' %}
+  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong style="color:var(--bad)">Couldn't reach Gmail to verify the new password for {{f.email}}.</strong> The old one was kept. If this app is hosted on a network that blocks outbound SMTP (e.g. Render's free tier), the check can't run there — try from a host that allows SMTP.</span>
+  </div>
   {% elif f.code == 'sigok' %}
   <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
     <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
@@ -65,6 +80,9 @@
           <svg class="eye-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19M6.61 6.61A18.5 18.5 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 5.39-1.61M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="m2 2 20 20"/></svg>
         </button>
       </div>
+      <label>Sign-in account <span class="muted">— optional; only if the email above is a Gmail "Send mail as" alias</span></label>
+      <input type="email" name="login_email" placeholder="ashutoshpalai@remotedesk.com">
+      <div class="muted" style="font-size:12px;margin:-4px 0 4px">Leave blank normally. Set it to the <strong>real Google account</strong> that owns the alias — we sign in as that account (with its app password) but still send <em>from</em> the address above.</div>
       <label>Daily cap <span class="muted">— warm-up starts at 8/day, ramps +2/day up to this</span></label>
       <input type="number" name="daily_cap" value="25" min="1" max="50">
       <div style="margin-top:18px"><button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>Add mailbox</button></div>
@@ -78,15 +96,27 @@
   <tbody>
   {% for m in mailboxes %}
   <tr>
-    <td>{{m.email}}{% if m.display_name %}<div class="sub-line">{{m.display_name}}</div>{% endif %}</td>
+    <td>{{m.email}}{% if m.display_name %}<div class="sub-line">{{m.display_name}}</div>{% endif %}{% if m.auth_email %}<div class="sub-line">signs in as {{m.auth_email}}</div>{% endif %}</td>
     <td>{% if m.active %}<span class="tag active">active</span>
         {% else %}<span class="tag paused">paused</span>{% if m.paused_reason %}<div class="sub-line">{{m.paused_reason}}</div>{% endif %}{% endif %}</td>
     <td class="mono">{{m.sent_today}}</td>
     <td class="mono">{{m.effective_cap()}} <span class="muted">/ {{m.daily_cap}}</span></td>
     <td class="mono" style="{{'color:var(--bad);font-weight:600' if m.bounce_rate() > 0.03}}">{{'%.1f'|format(m.bounce_rate()*100)}}%</td>
-    <td style="text-align:right"><form class="inline" method="post" action="/mailboxes/{{m.id}}/toggle">
-      <button class="btn ghost sm">{{'Pause' if m.active else 'Resume'}}</button>
-    </form></td>
+    <td style="text-align:right">
+      <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap">
+        <form class="inline" method="post" action="/mailboxes/{{m.id}}/password" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <input type="email" name="login_email" placeholder="sign-in account (if alias)"
+                 value="{{m.auth_email}}" autocomplete="off" style="width:190px;padding:6px 8px;margin:0"
+                 title="Only if this mailbox is a Gmail 'Send mail as' alias — the real account to sign in as. Leave blank to sign in as the mailbox address itself.">
+          <input type="password" name="app_password" placeholder="new 16-char app password" required
+                 autocomplete="off" style="width:190px;padding:6px 8px;margin:0">
+          <button class="btn ghost sm">Update password</button>
+        </form>
+        <form class="inline" method="post" action="/mailboxes/{{m.id}}/toggle">
+          <button class="btn ghost sm">{{'Pause' if m.active else 'Resume'}}</button>
+        </form>
+      </div>
+    </td>
   </tr>
   {% else %}
   <tr><td colspan="6"><div class="empty">
@@ -111,8 +141,8 @@
         <input type="checkbox" name="signature_on" value="on" {% if m.signature_on %}checked{% endif %} style="width:auto;margin:0">
         Append this signature to emails from {{m.email}}
       </label>
-      <label>Name <span class="muted">— from the mailbox display name{% if not m.display_name %} (not set yet){% endif %}</span></label>
-      <input type="text" value="{{m.display_name}}" disabled style="opacity:.7">
+      <label>Name <span class="muted">— shown in your signature and as the sender name on the From: line</span></label>
+      <input type="text" name="display_name" value="{{m.display_name}}" placeholder="Ashutosh Palai">
       <label>Title</label>
       <input type="text" name="sig_title" value="{{m.sig_title}}" placeholder="Founder's office">
       <label>Company</label>
@@ -132,7 +162,7 @@
     </form>
     <div style="flex:1 1 320px;min-width:280px">
       <div class="muted" style="margin-bottom:8px">Preview — what recipients see</div>
-      <div style="border:1px solid var(--border-2);border-radius:10px;padding:18px;background:#ffffff;color:#000">
+      <div style="border:1px solid var(--border-2);border-radius:10px;padding:18px;background:#ffffff;color:#000;max-width:100%;overflow-x:auto">
         <div style="color:#555;font-size:13px">…your email message…</div>
         {{ sig_previews[m.id]|safe }}
       </div>

@@ -40,26 +40,6 @@ def roll_daily_counters(db, mailbox: Mailbox, today: str):
         mailbox.sent_today_date = today
 
 
-def due_counts(db=None):
-    """How many emails are ready to send right now, split by first-touch vs
-    follow-up. Powers the dashboard's manual 'Send' panel so you know what a
-    click will do before you click it."""
-    own = db is None
-    db = db or SessionLocal()
-    try:
-        now = utcnow()
-        due = (db.query(Enrollment)
-               .filter(Enrollment.status == "active",
-                       Enrollment.next_send_at <= now).all())
-        first = sum(1 for e in due if e.current_step == 0)
-        followup = sum(1 for e in due if e.current_step > 0)
-        return {"first": first, "followup": followup,
-                "total": first + followup}
-    finally:
-        if own:
-            db.close()
-
-
 def _do_sends(db, now, manual: bool):
     """Core send loop. Returns a stats dict describing what happened.
 
@@ -143,16 +123,6 @@ def process_due_sends():
     db = SessionLocal()
     try:
         return _do_sends(db, utcnow(), manual=False)
-    finally:
-        db.close()
-
-
-def send_due_now():
-    """Manual entry point — a button click drains the whole due queue now
-    (still capped per mailbox, still skips suppressed). Returns stats."""
-    db = SessionLocal()
-    try:
-        return _do_sends(db, utcnow(), manual=True)
     finally:
         db.close()
 
@@ -243,7 +213,7 @@ def poll_inboxes():
         for mailbox in db.query(Mailbox).filter(Mailbox.active.is_(True)).all():
             try:
                 imap = imaplib.IMAP4_SSL(mailbox.imap_host)
-                imap.login(mailbox.email, mailbox.app_password)
+                imap.login(mailbox.login_email(), mailbox.app_password)
                 imap.select("INBOX")
                 _, data = imap.search(None, "UNSEEN")
                 for num in (data[0].split() if data and data[0] else []):
