@@ -8,22 +8,27 @@ So emails 1+2 share a thread, email 3 opens a new one (and email 4 replies to
 it), and email 5 opens the final break-up thread — exactly as designed.
 
 Tokens available in every body: {{first_name}}, {{last_name}}, {{company}},
-{{title}}, {{industry}}, {{trigger}}, plus {{opener}} / {{research}} from the AI
-steps if you want to splice them in. This manager copy is intentionally
-self-contained, so it doesn't use {{opener}}. The brand blurb that appears under
-every email is set once in emailer.BRAND_BLURB — not here.
+{{title}}, {{industry}}, {{trigger}}, plus {{research}} for the raw briefing.
+
+{{personalization}} is special and used in the PRIMARY email only: it is the
+AI-written, brand-specific two-paragraph intro (see enrich.ensure_personalization),
+generated + cached at send time from the lead's Apollo facts (paragraph 1 = the
+brand detail; paragraph 2 = a Claude line on why Efforti). One cheap Haiku call,
+no web search. It expands to two paragraphs after the greeting, or to nothing when
+there's no API key — so the email reads cleanly either way. Follow-ups stay static.
+The brand blurb under every email is set once in emailer.BRAND_BLURB — not here.
 """
 from .models import Sequence, SequenceStep
 
 # Bump this name whenever the canonical copy changes so a fresh version seeds
 # cleanly and becomes the single active default (older ones are retired below).
-SEQUENCE_NAME = "Efforti — CEO cold sequence v2"
+SEQUENCE_NAME = "Efforti — CEO cold sequence v3"
 
 # ── Email 1 · Day 0 · opens the thread ──────────────────────────────────────
 STEP_0_SUBJECT = "who's blocked at {{company}} right now?"
 # Manager alternates: "the question no dashboard answers" · "9:12 am at {{company}}"
 STEP_0_BODY = """Hi {{first_name}},
-
+{{personalization}}
 If I asked you right now — who on your team has been blocked the longest, and on what — could you answer without calling a meeting or pinging three managers?
 
 Most leaders can't. Not because they lack dashboards, but because dashboards only know what someone typed into a tracker — and most real work never gets typed in.

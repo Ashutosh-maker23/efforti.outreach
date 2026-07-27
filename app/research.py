@@ -117,6 +117,49 @@ def _research_from_facts(client, lead: Lead) -> str:
     return _clean_briefing(_text(resp))
 
 
+def ensure_research_for_lead(db, client, lead) -> str:
+    """Research this lead's company on demand (used at send time) if we don't
+    already have a briefing. Tries live web search, falls back to a facts-only
+    summary. Caches the briefing on this lead AND on every other lead at the same
+    company that's still missing one — so a company is researched once no matter
+    how many contacts you email there. Returns the briefing (possibly '').
+    The caller need not commit; this commits its own cache write."""
+    existing = (getattr(lead, "company_research", "") or "").strip()
+    if existing:
+        return existing
+
+    briefing = ""
+    try:
+        briefing = _research_with_web(client, lead)
+    except Exception as e:
+        log(db, "research", f"web research failed for {lead.company}: {e}")
+    if not briefing:
+        try:
+            briefing = _research_from_facts(client, lead)
+        except Exception as e:
+            log(db, "error", f"research failed for {lead.company}: {e}")
+    if not briefing:
+        return ""
+
+    now = utcnow()
+    lead.company_research = briefing
+    lead.researched_at = now
+    key = (lead.company_domain or lead.company or "").strip().lower()
+    if key:                              # fan the briefing out to the same company
+        others = (db.query(Lead)
+                  .filter(Lead.id != lead.id,
+                          (Lead.company_research == "") |
+                          (Lead.company_research.is_(None))).all())
+        for other in others:
+            okey = (other.company_domain or other.company or "").strip().lower()
+            if okey == key:
+                other.company_research = briefing
+                other.researched_at = now
+    db.commit()
+    log(db, "research", f"researched {lead.company} for {lead.email}")
+    return briefing
+
+
 def research_companies(db, limit: int = MAX_COMPANIES, refresh: bool = False) -> dict:
     """Research each distinct company among verified/enrolled leads and cache the
     briefing on every lead at that company. `refresh=True` re-researches even

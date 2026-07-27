@@ -25,6 +25,14 @@ BRAND_BLURB = (
 
 
 def render(template_str: str, lead: Lead) -> str:
+    # `intro` holds the AI-written, brand-specific two-paragraph block for the
+    # primary email (see enrich.ensure_personalization). `personalization` is that
+    # block wrapped in the blank lines that make it drop cleanly into the body
+    # between the greeting and the pitch — and it collapses to nothing when there's
+    # no block, so the email reads perfectly either way. `opener` is the legacy
+    # one-line field, exposed only for backward compatibility with old templates.
+    intro = (getattr(lead, "intro", "") or "").strip()
+    personalization = f"\n{intro}\n" if intro else ""
     return Template(template_str).render(
         first_name=lead.first_name or "there",
         last_name=lead.last_name,
@@ -32,7 +40,8 @@ def render(template_str: str, lead: Lead) -> str:
         company=lead.company or "your company",
         trigger=lead.trigger,
         industry=getattr(lead, "industry", ""),
-        opener=getattr(lead, "opener", "") or "",
+        opener=(getattr(lead, "opener", "") or ""),
+        personalization=personalization,
         research=getattr(lead, "company_research", "") or "",
     )
 

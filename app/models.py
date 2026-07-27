@@ -30,9 +30,9 @@ class Mailbox(Base):
     # auth_email=you@realaccount.com. We authenticate as auth_email but keep the
     # From: header as `email`, which Gmail allows for a verified alias.
     auth_email = Column(String, default="")
-    daily_cap = Column(Integer, default=25)        # hard ceiling per day
-    warmup_start = Column(Integer, default=8)      # day-1 volume
-    warmup_step = Column(Integer, default=2)       # +N per day until cap
+    daily_cap = Column(Integer, default=25)        # RECOMMENDED daily volume ceiling (advisory only — NOT enforced)
+    warmup_start = Column(Integer, default=8)      # recommended day-1 volume
+    warmup_step = Column(Integer, default=2)       # recommended +N per day up to daily_cap
     created_at = Column(DateTime, default=utcnow)
     active = Column(Boolean, default=True)
     paused_reason = Column(String, default="")     # set on auto-pause
@@ -59,7 +59,10 @@ class Mailbox(Base):
         return (self.sig_email or "").strip() or self.email
 
     def effective_cap(self) -> int:
-        """Warm-up ramp: start low, add warmup_step per day of age, cap at daily_cap."""
+        """RECOMMENDED daily send volume (advisory only — nothing enforces it).
+        Warm-up ramp for deliverability: start at warmup_start, add warmup_step per
+        day of the mailbox's age, up to daily_cap. Shown on the Mailboxes/Dashboard
+        pages as guidance; sends are never blocked by it."""
         age_days = max(0, (utcnow() - self.created_at).days)
         return min(self.daily_cap, self.warmup_start + age_days * self.warmup_step)
 
@@ -81,9 +84,10 @@ class Lead(Base):
     trigger = Column(String, default="")           # e.g. "raised seed Mar 2026"
     industry = Column(String, default="")          # from Apollo, feeds personalization
     company_desc = Column(Text, default="")        # short blurb, feeds AI opener
-    company_research = Column(Text, default="")    # live web research, per company, feeds opener
+    company_research = Column(Text, default="")    # live web research, per company, feeds the intro
     researched_at = Column(DateTime)               # when company_research was last refreshed
-    opener = Column(Text, default="")              # AI-written first line, per lead
+    intro = Column(Text, default="")               # AI-written 2-paragraph brand intro for the PRIMARY email
+    opener = Column(Text, default="")              # LEGACY one-line opener (superseded by `intro`; unused)
     timezone_offset = Column(Float, default=5.5)   # hours vs UTC; IST default
     status = Column(String, default="new", index=True)
     # new -> verified -> enrolled -> contacted -> replied | bounced | unsubscribed | finished
@@ -166,6 +170,35 @@ class Event(Base):
     created_at = Column(DateTime, default=utcnow)
 
 
+class Setting(Base):
+    """Manually-entered figures the app can't derive from live data — the Demo
+    and Converted funnel stages, which we track ourselves off-platform. Keyed by
+    name and scope ("" = all mailboxes combined, else str(mailbox_id)) so the
+    dashboard shows them per-mailbox or combined, alongside the live stages."""
+    __tablename__ = "settings"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, index=True)                # "demo" | "converted"
+    scope = Column(String, default="", index=True)   # "" = global, else mailbox id
+    value = Column(Integer, default=0)
+
+
+class Reply(Base):
+    """A real inbound reply captured from a mailbox's inbox by the IMAP poller.
+    We store the actual message — who it's from, the subject, a body snippet, and
+    WHICH of our accounts it landed in — so replies are readable in the app, not
+    just counted. Deduped on the inbound Message-ID so re-scanning never doubles."""
+    __tablename__ = "replies"
+    id = Column(Integer, primary_key=True)
+    mailbox_email = Column(String, index=True)       # the account that received it
+    lead_email = Column(String, default="", index=True)  # matched lead, if any
+    from_email = Column(String, default="")          # who actually sent the reply
+    from_name = Column(String, default="")
+    subject = Column(String, default="")
+    snippet = Column(Text, default="")               # plain-text body, trimmed
+    imap_message_id = Column(String, default="", index=True)  # inbound Message-ID
+    received_at = Column(DateTime, default=utcnow)
+
+
 # DB location is configurable so it can live on a mounted volume in production.
 # Local default: ./outreach.db.  On a host with a persistent disk at /data:
 #   DATABASE_URL=sqlite:////data/outreach.db   (note the 4 slashes = absolute)
@@ -205,6 +238,7 @@ def _migrate_sqlite():
         "leads": {
             "company_research": "TEXT DEFAULT ''",
             "researched_at": "DATETIME",
+            "intro": "TEXT DEFAULT ''",
         },
     }
     with engine.begin() as conn:
@@ -220,3 +254,23 @@ def _migrate_sqlite():
 
 def log(db, kind: str, detail: str):
     db.add(Event(kind=kind, detail=detail))
+
+
+def get_metric(db, name: str, scope: str = "") -> int:
+    """Read a manually-entered figure (0 if never set) for the given scope."""
+    row = (db.query(Setting)
+           .filter(Setting.name == name, Setting.scope == scope).first())
+    return row.value if row else 0
+
+
+def set_metric(db, name: str, value: int, scope: str = "") -> int:
+    """Store a manually-entered figure for the given scope. Clamped to >= 0.
+    Caller commits."""
+    value = max(0, int(value))
+    row = (db.query(Setting)
+           .filter(Setting.name == name, Setting.scope == scope).first())
+    if row:
+        row.value = value
+    else:
+        db.add(Setting(name=name, scope=scope, value=value))
+    return value

@@ -32,36 +32,19 @@
   {% endif %}
 {% endif %}
 
-{% if research_result %}
-  {% set rr = research_result %}
-  {% if rr.provider == 'fallback-only' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Research didn't run — no API key.</strong> Set <code>ANTHROPIC_API_KEY</code> so Claude can research your companies.</span>
-  </div>
-  {% else %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">Researched {{rr.companies}} compan{{'y' if rr.companies==1 else 'ies'}} → {{rr.leads}} leads.</strong>
-      {{rr.web}} via live web search{% if rr.noweb %} · {{rr.noweb}} from known facts (web search unavailable){% endif %}{% if rr.failed %} · {{rr.failed}} failed{% endif %}.
-      Now click <strong>Generate openers</strong> — the first line will use these specifics.</span>
-  </div>
-  {% endif %}
-{% endif %}
-
 {% if enrich_result %}
   {% set er = enrich_result %}
   {% if er.provider == 'fallback-only' %}
   <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
     <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">AI openers are OFF — {{er.fallback}} leads got the same generic line.</strong>
-      No API key reached the app, so nothing was personalized by AI. Set <code>ANTHROPIC_API_KEY</code> (in your <code>.env</code> locally, or the host's dashboard) and generate again.</span>
+    <span><strong style="color:var(--bad)">Personalization is OFF — no API key.</strong>
+      First emails will still send, but without the brand-specific intro. Set <code>ANTHROPIC_API_KEY</code> (in your <code>.env</code> locally, or the host's dashboard) so Claude can research and personalize.</span>
   </div>
   {% else %}
   <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
     <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">{{er.ai}} openers written by AI ({{er.provider}}).</strong>
-      {% if er.fallback %}{{er.fallback}} fell back to the generic line (usually thin company data or a transient API error).{% else %}Every verified lead without an opener now has a personalized first line.{% endif %}</span>
+    <span><strong style="color:var(--ok)">{{er.ai}} brand intro{{'' if er.ai==1 else 's'}} pre-written by Claude.</strong>
+      {% if er.fallback %}{{er.fallback}} couldn't be generated (usually thin company data or a transient error) — those first emails will send without the intro.{% else %}Every verified/enrolled lead now has its first-email intro ready.{% endif %}</span>
   </div>
   {% endif %}
 {% endif %}
@@ -83,7 +66,6 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="{{'var(--ok)' if ok else 'var(--warn)'}}"><path d="M20 6 9 17l-5-5"/></svg>
       <span>
       {% if f.status == 'sent' %}<strong style="color:var(--ok)">Email sent.</strong>
-      {% elif f.status == 'capped' %}Not sent — that mailbox has hit its <strong>daily limit</strong>. Send the rest tomorrow, or raise the cap on the Mailboxes page.
       {% elif f.status == 'no_mailbox' %}Add and turn on a <a href="/mailboxes">mailbox</a> first — there's nothing to send from.
       {% elif f.status == 'no_sequence' %}There's no active email sequence to send.
       {% elif f.status == 'stopped' %}This person already replied, bounced, or opted out — sending is stopped for them.
@@ -97,8 +79,8 @@
     <div class="note-box" style="margin-bottom:22px;background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent)">
       <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
       <span><strong style="color:var(--ok)">Sent {{f.sent}} × {{f.label}}.</strong>
-      {% set held = f.capped + f.skipped + f.no_mailbox %}
-      {% if held %}<br>{% if f.capped %}{{f.capped}} held by daily limit · {% endif %}{% if f.skipped %}{{f.skipped}} skipped (not at this step) · {% endif %}{% if f.no_mailbox %}{{f.no_mailbox}} had no mailbox{% endif %}.{% endif %}</span>
+      {% set held = f.skipped + f.no_mailbox %}
+      {% if held %}<br>{% if f.skipped %}{{f.skipped}} skipped (not at this step) · {% endif %}{% if f.no_mailbox %}{{f.no_mailbox}} had no mailbox{% endif %}.{% endif %}</span>
     </div>
   {% endif %}
 {% endif %}
@@ -163,42 +145,12 @@
   </div>
 
   <div class="card">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Research companies</h2>
-    <form method="post" action="/leads/research">
-      <p class="muted" style="margin-bottom:4px;line-height:1.55">Claude searches the web for <strong style="color:var(--text-2)">current specifics</strong> on each company — what they do, recent funding/launches/hiring, and the scaling pain a CEO feels — and caches a tight briefing per company. That briefing then powers a sharper, more relevant opener.</p>
-      <label style="margin-top:10px">Max companies this run <span class="muted">— cost cap; researches one call per company</span></label>
-      <input type="number" name="limit" value="60" min="1" max="500">
-      <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin-top:12px">
-        <input type="checkbox" name="refresh" value="on" style="width:auto"> Re-research companies that already have a briefing
-      </label>
-      <p class="muted" style="margin-top:8px;font-size:12px">{{researched_pool}} lead{{'' if researched_pool==1 else 's'}} already have research. Spends API + web-search credits — run it once per batch, before generating openers.</p>
-      <div style="margin-top:16px"><button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Research companies</button></div>
-    </form>
-  </div>
-
-  <div class="card">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg>Generate AI openers</h2>
+    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg>Personalize first emails</h2>
     <form method="post" action="/leads/enrich">
       <input type="hidden" name="limit" value="500">
-      <p class="muted" style="margin-bottom:4px;line-height:1.55">Writes one personalized first line for every <strong style="color:var(--text-2)">verified</strong> lead that doesn't have one yet. Uses the <strong style="color:var(--text-2)">company research</strong> above when present (sharper, current) — otherwise the Apollo facts. Falls back to a safe generic line only if no key is set.</p>
-      <div style="margin-top:18px"><button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>Generate openers</button></div>
+      <p class="muted" style="margin-bottom:4px;line-height:1.55">The <strong style="color:var(--text-2)">first email</strong> is customized to each brand <strong style="color:var(--text-2)">automatically when you send it</strong> — paragraph 1 is built from the company's <strong style="color:var(--text-2)">Apollo details</strong>, and Claude writes paragraph 2 on <strong style="color:var(--text-2)">why Efforti</strong> fits that brand. One cheap Claude call, <strong style="color:var(--text-2)">no web research</strong> — fast and light, so you can send at volume. This button just <strong style="color:var(--text-2)">pre-generates</strong> the intros now so a big send is instant. Follow-ups stay as written.</p>
+      <div style="margin-top:18px"><button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>Pre-generate intros</button></div>
     </form>
-  </div>
-
-  <div class="card">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>Enroll verified leads</h2>
-    {% if mailbox_count == 0 %}
-      <div class="empty" style="padding:20px 0"><p>Add a <a href="/mailboxes">mailbox</a> first.</p></div>
-    {% else %}
-    <form method="post" action="/leads/enroll">
-      <label>Sequence</label>
-      <select name="sequence_id">
-        {% for s in sequences %}<option value="{{s.id}}">{{s.name}}</option>{% endfor %}
-      </select>
-      <p class="muted" style="margin-top:12px;line-height:1.55">Enrolls all {{verified_pool}} “verified” leads{% if active_mb %} into <strong style="color:var(--text-2)">{{active_mb.email}}</strong>{% else %}, round-robin across active mailboxes{% endif %}, staggered across days to respect warm-up caps.</p>
-      <div style="margin-top:16px"><button class="btn">Enroll all verified</button></div>
-    </form>
-    {% endif %}
   </div>
 </div>
 
@@ -257,6 +209,11 @@
 .seltools{display:flex;align-items:center;gap:10px;margin:6px 0 12px;font-size:13px;flex-wrap:wrap}
 .seltools input[type=number]{width:64px;padding:6px 8px}
 .seltools .selall{display:flex;align-items:center;gap:7px;font-weight:500}
+.leadfilters{display:flex;align-items:center;gap:14px;margin-left:auto;flex-wrap:wrap}
+.leadfilters .ff{display:flex;align-items:center;gap:7px;margin:0}
+.leadfilters .ff > span{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-3)}
+.leadfilters select{width:auto;min-width:152px;margin:0;padding:7px 30px 7px 11px;
+  font-size:12.5px;font-weight:600;background-position:right 10px center}
 .bulkbar{display:flex;align-items:center;gap:14px;padding:11px 15px;margin-bottom:14px;
   background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
   border-radius:12px;position:sticky;top:8px;z-index:5;flex-wrap:wrap}
@@ -274,16 +231,8 @@ td .btn.sm{white-space:nowrap}
 .dontmail:hover{color:var(--bad)}
 </style>
 
-<h2 style="margin-bottom:2px">Your leads — pick who to email
-  {% if status_filter %}<span class="hint">· showing: {{status_filter}} · <a href="/leads">show all</a></span>{% endif %}
-</h2>
+<h2 style="margin-bottom:2px">Your leads — pick who to email</h2>
 <p class="muted" style="font-size:12.5px;margin-bottom:10px">Send the first email or the next follow-up to one person, or tick several and send the same email to all of them at once. Already-sent emails show a ✓ and can't be sent twice.</p>
-<div class="chips">
-  <a href="/leads" class="{{'on' if not status_filter}}">all</a>
-  {% for s, lbl in [('verified','need first email'),('enrolled','need first email'),('contacted','in follow-up'),('replied','replied'),('bounced','bounced'),('unsubscribed','opted out'),('finished','done')] %}
-  <a href="/leads?status={{s}}" class="{{'on' if status_filter==s}}">{{s}}</a>
-  {% endfor %}
-</div>
 
 {% set actives = mailboxes_all | selectattr('active') | list %}
 <div class="sendfrom">
@@ -321,6 +270,26 @@ td .btn.sm{white-space:nowrap}
   <input type="number" id="topN" value="50" min="1" max="500">
   <button type="button" class="btn ghost sm" id="topBtn">Select</button>
   <a href="#" id="clearSel" class="muted" style="display:none">clear selection</a>
+
+  <!-- Filters as compact dropdowns, right-aligned (replaces the two chip rows). Live counts kept. -->
+  <div class="leadfilters">
+    <div class="ff"><span>Ready to send</span>
+      <select onchange="location.href=this.value" aria-label="Filter by next step due">
+        <option value="/leads" {{ 'selected' if due_filter < 0 }}>Any step</option>
+        {% for i in range(total_steps) %}
+        <option value="/leads?due={{i}}" {{ 'selected' if due_filter == i }}>{{ 'First email' if i == 0 else 'Follow-up ' ~ i }} · {{ due_counts.get(i, 0) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="ff"><span>Status</span>
+      <select onchange="location.href=this.value" aria-label="Filter by lead status">
+        <option value="/leads" {{ 'selected' if not status_filter }}>All</option>
+        {% for s in ['contacted','replied','bounced','finished'] %}
+        <option value="/leads?status={{s}}" {{ 'selected' if status_filter == s }}>{{ s|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
 </div>
 <div id="bulkBar" class="bulkbar" style="display:none">
   <span><b id="bulkCount">0</b> selected</span>
@@ -334,7 +303,7 @@ td .btn.sm{white-space:nowrap}
 </form>
 
 <div class="tbl"><table>
-  <thead><tr><th style="width:34px"></th><th>Contact</th><th>Company</th><th>Opener</th><th>Outreach</th><th style="width:36px"></th></tr></thead>
+  <thead><tr><th style="width:34px"></th><th>Contact</th><th>Company</th><th>Custom intro</th><th>Outreach</th><th style="width:36px"></th></tr></thead>
   <tbody>
   {% for l in leads %}
   {% set pr = progress[l.id] %}
@@ -344,7 +313,7 @@ td .btn.sm{white-space:nowrap}
     <td><div class="contact-em">{{l.email}}</div>
       <div class="contact-sub">{{l.first_name}} {{l.last_name}}{% if l.title %} · {{l.title}}{% endif %}</div></td>
     <td>{{l.company}} <span class="muted">{{l.company_size}}</span></td>
-    <td class="muted" style="max-width:300px;font-size:12.5px">{{ (l.opener or l.trigger)|truncate(120) }}</td>
+    <td class="muted" style="max-width:300px;font-size:12.5px">{{ (l.intro or l.trigger)|truncate(120) }}</td>
     <td>
       {% if pr.state == 'ready' %}
         <div class="steps">

@@ -20,7 +20,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from .analytics import compute as compute_analytics
 from .apollo import SIZE_PRESETS, preview_apollo, pull_apollo
@@ -28,8 +28,9 @@ from .emailer import signature_preview_html, verify_credentials
 from .enrich import enrich_leads
 from .importer import import_csv
 from .research import research_companies
-from .models import (Enrollment, Event, Lead, Mailbox, Message, SessionLocal,
-                     Sequence, SequenceStep, Suppression, init_db, log, utcnow)
+from .models import (Enrollment, Event, Lead, Mailbox, Message, Reply,
+                     SessionLocal, Sequence, SequenceStep, Suppression,
+                     get_metric, init_db, log, set_metric, utcnow)
 from .scheduler import (poll_inboxes, poll_now, process_due_sends,
                         send_enrollment_step, weekly_counter_decay)
 from .seed import seed_default_sequence
@@ -64,6 +65,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Efforti Outreach", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "ui"))
+
+
+def sent_today_counts(db):
+    """Real 'sent today' per mailbox, read straight from the Message log — the
+    source of truth. The stored `mailbox.sent_today` counter only rolls over when
+    that mailbox next attempts a send, so across midnight/restarts it can show a
+    stale value (e.g. yesterday's count on a mailbox that hasn't sent today). We
+    never display that counter; we count actual sent messages since UTC midnight.
+    Returns {mailbox_email: count}."""
+    start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = (db.query(Message.mailbox_email, func.count())
+            .filter(Message.status == "sent", Message.sent_at >= start)
+            .group_by(Message.mailbox_email).all())
+    return {email: n for email, n in rows}
 
 
 def active_mailbox(request, db):
@@ -107,55 +122,84 @@ def switch_mailbox(request: Request, mailbox_id: str = Form("")):
 
 # ---------------- Dashboard ----------------
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, polled: int = 0, pollskip: int = 0):
+def dashboard(request: Request, polled: int = 0, pollskip: int = 0, saved: int = 0):
     db = SessionLocal()
     try:
         mb = active_mailbox(request, db)
+        # Manual figures are stored per scope: "" = all mailboxes, else the id.
+        scope = str(mb.id) if mb else ""
         recent_q = db.query(Event).order_by(Event.id.desc())
-        replies_q = db.query(Event).filter(Event.kind == "reply") \
-                      .order_by(Event.id.desc())
+        # Real inbound replies, captured by the IMAP poller with their content.
+        replies_q = db.query(Reply).order_by(Reply.id.desc())
 
         if mb:
             # Scope everything to this one mailbox's book of business.
-            enr = db.query(Enrollment).filter(Enrollment.mailbox_id == mb.id)
-            funnel = {
-                "leads": enr.count(),
-                "enrolled": enr.filter(Enrollment.status == "active").count(),
-                "contacted": db.query(Message.lead_email).filter(
-                    Message.mailbox_email == mb.email).distinct().count(),
-                "replied": enr.filter(
-                    Enrollment.status == "halted_reply").count(),
-            }
+            leads = db.query(Enrollment).filter(
+                Enrollment.mailbox_id == mb.id).count()
+            contacted = db.query(Message.lead_email).filter(
+                Message.mailbox_email == mb.email,
+                Message.status == "sent").distinct().count()
+            # Real replies detected by the IMAP poller for this mailbox's threads.
+            replied = db.query(Enrollment).filter(
+                Enrollment.mailbox_id == mb.id,
+                Enrollment.status == "halted_reply").count()
             sent_total = db.query(Message).filter(
                 Message.mailbox_email == mb.email,
                 Message.status == "sent").count()
-            bounced = enr.filter(Enrollment.status == "halted_bounce").count()
-            unsubbed = enr.filter(Enrollment.status == "halted_unsub").count()
             mailboxes = [mb]
             recent_q = recent_q.filter(Event.detail.contains(mb.email))
-            replies_q = replies_q.filter(Event.detail.contains(mb.email))
+            replies_q = replies_q.filter(Reply.mailbox_email == mb.email)
         else:
-            funnel = {
-                "leads": db.query(Lead).count(),
-                "enrolled": db.query(Enrollment).count(),
-                "contacted": db.query(Lead).filter(
-                    Lead.status.in_(["contacted", "finished", "replied"])).count(),
-                "replied": db.query(Lead).filter(Lead.status == "replied").count(),
-            }
+            leads = db.query(Lead).count()
+            contacted = db.query(Message.lead_email).filter(
+                Message.status == "sent").distinct().count()
+            # Leads flipped to "replied" by the IMAP poller = a real inbox reply.
+            replied = db.query(Lead).filter(Lead.status == "replied").count()
             sent_total = db.query(Message).filter(
                 Message.status == "sent").count()
-            bounced = db.query(Lead).filter(Lead.status == "bounced").count()
-            unsubbed = db.query(Suppression).filter(
-                Suppression.reason == "unsubscribed").count()
             mailboxes = db.query(Mailbox).all()
 
+        # Demo and Converted have no live source — we track them off-platform and
+        # enter them by hand on the dashboard, so they're read from the store.
+        demo = get_metric(db, "demo", scope)
+        converted = get_metric(db, "converted", scope)
+        funnel = {
+            "leads": leads, "contacted": contacted, "replied": replied,
+            "demo": demo, "converted": converted,
+            "reply_rate": round(replied / contacted * 100) if contacted else 0,
+            "conv_rate": round(converted / demo * 100) if demo else 0,
+        }
+
         recent = recent_q.limit(12).all()
-        replies = replies_q.limit(5).all()
+        replies = replies_q.limit(8).all()
         return templates.TemplateResponse(request, "dashboard.html", ctx(
             request, db, active_mb=mb, funnel=funnel, sent_total=sent_total,
-            bounced=bounced, unsubbed=unsubbed, mailboxes=mailboxes,
+            mailboxes=mailboxes, sent_today_map=sent_today_counts(db),
             recent=recent, replies=replies,
-            polled=polled, pollskip=pollskip))
+            polled=polled, pollskip=pollskip, saved=saved))
+    finally:
+        db.close()
+
+
+@app.post("/metrics")
+def update_metrics(request: Request, demo: str = Form("0"),
+                   converted: str = Form("0")):
+    """Save the manually-tracked Demo and Converted counts for the current scope
+    (the active mailbox, or all mailboxes when none is selected). These stages
+    aren't derived from sends — we keep them ourselves — so they're entered by
+    hand and simply stored."""
+    db = SessionLocal()
+    try:
+        mb = active_mailbox(request, db)
+        scope = str(mb.id) if mb else ""
+        d = int(demo) if demo.strip().lstrip("-").isdigit() else 0
+        c = int(converted) if converted.strip().lstrip("-").isdigit() else 0
+        d = set_metric(db, "demo", d, scope)
+        c = set_metric(db, "converted", c, scope)
+        log(db, "metric", f"Demo/converted set to {d}/{c}"
+                          f"{' for ' + mb.email if mb else ' (all mailboxes)'}")
+        db.commit()
+        return RedirectResponse("/?saved=1", status_code=303)
     finally:
         db.close()
 
@@ -272,7 +316,7 @@ def _ensure_enrollment(db, lead, mailbox):
     return enr
 
 
-def _leads_ctx(request, db, status="", **extra):
+def _leads_ctx(request, db, status="", due=-1, **extra):
     """Shared context for the Leads page (used by the page and the preview)."""
     mb = active_mailbox(request, db)
     q = db.query(Lead).order_by(Lead.id.desc())
@@ -285,13 +329,29 @@ def _leads_ctx(request, db, status="", **extra):
         q = q.filter(Lead.status == status)
     leads = q.limit(500).all()
     prog, total = _lead_progress(db, leads)
+
+    # Live "next step due" breakdown, straight from each lead's real send progress
+    # (0 = first email, 1 = follow-up 1, ...). Powers the step-filter chips and the
+    # counts on them — every number is computed from the DB, none are cached/mocked.
+    due_counts = {}
+    for l in leads:
+        p = prog.get(l.id)
+        if p and p["state"] == "ready" and p["next"] is not None:
+            due_counts[p["next"]] = due_counts.get(p["next"], 0) + 1
+
+    # When a step filter is active, narrow the table to leads whose NEXT email is
+    # exactly that step — so a bulk send hits one clean category at a time.
+    if due >= 0:
+        leads = [l for l in leads
+                 if (prog.get(l.id) or {}).get("state") == "ready"
+                 and (prog.get(l.id) or {}).get("next") == due]
+
     return ctx(request, db, active_mb=mb, leads=leads,
                progress=prog, total_steps=total,
                step_labels=[_step_label(i, short=True) for i in range(total)],
-               sequences=db.query(Sequence).filter(Sequence.active.is_(True)).all(),
+               due_counts=due_counts, due_filter=due,
                status_filter=status,
                mailbox_count=db.query(Mailbox).filter(Mailbox.active.is_(True)).count(),
-               verified_pool=db.query(Lead).filter(Lead.status == "verified").count(),
                researched_pool=db.query(Lead).filter(
                    Lead.status.in_(["verified", "enrolled"]),
                    Lead.company_research != "",
@@ -300,11 +360,11 @@ def _leads_ctx(request, db, status="", **extra):
 
 
 @app.get("/leads", response_class=HTMLResponse)
-def leads_page(request: Request, status: str = "", pulled: int = 0,
+def leads_page(request: Request, status: str = "", due: int = -1, pulled: int = 0,
                brands: int = 0, per_brand: int = 0, brands_filled: int = 0,
                fetched: int = 0, imported: int = 0, brand_full: int = 0,
                dupe: int = 0, no_email: int = 0, exhausted: int = 0,
-               one: str = "", bulk: int = 0, bsent: int = 0, bcapped: int = 0,
+               one: str = "", bulk: int = 0, bsent: int = 0,
                bskip: int = 0, bnomb: int = 0, bstep: int = -1,
                enr: int = 0, provider: str = "", ai: int = 0, fb: int = 0,
                res: int = 0, companies: int = 0, rleads: int = 0, web: int = 0,
@@ -331,11 +391,11 @@ def leads_page(request: Request, status: str = "", pulled: int = 0,
         if one:
             send_feedback = {"kind": "one", "status": one}
         elif bulk:
-            send_feedback = {"kind": "bulk", "sent": bsent, "capped": bcapped,
+            send_feedback = {"kind": "bulk", "sent": bsent,
                              "skipped": bskip, "no_mailbox": bnomb,
                              "label": _step_label(bstep) if bstep >= 0 else ""}
         return templates.TemplateResponse(request, "leads.html", _leads_ctx(
-            request, db, status=status, pull_result=pull_result,
+            request, db, status=status, due=due, pull_result=pull_result,
             send_feedback=send_feedback, enrich_result=enrich_result,
             research_result=research_result))
     finally:
@@ -441,50 +501,6 @@ def research(limit: int = Form(60), refresh: str = Form("")):
         db.close()
 
 
-@app.post("/leads/enroll")
-def enroll(request: Request, sequence_id: int = Form(...)):
-    """Enroll all 'verified' leads into a sequence. If a mailbox is active,
-    all leads go to that one mailbox; otherwise they spread round-robin across
-    every active mailbox. Staggered so day-one volume respects warm-up caps."""
-    db = SessionLocal()
-    try:
-        seq = db.query(Sequence).get(sequence_id)
-        mb = active_mailbox(request, db)
-        if mb and mb.active:
-            mailboxes = [mb]
-        else:
-            mailboxes = db.query(Mailbox).filter(Mailbox.active.is_(True)).all()
-        if not seq or not mailboxes:
-            return RedirectResponse("/leads?err=no_seq_or_mailbox",
-                                    status_code=303)
-        leads = db.query(Lead).filter(Lead.status == "verified").all()
-        now = utcnow()
-        per_day_capacity = sum(m.effective_cap() for m in mailboxes)
-        enrolled = 0
-        for lead in leads:
-            # Never open a second active thread for a lead that already has one —
-            # duplicate active enrollments make the scheduler send follow-ups
-            # multiple times and desync the 'next step' shown on the Leads page.
-            if _primary_enrollment(db, lead.id):
-                continue
-            mb = mailboxes[enrolled % len(mailboxes)]
-            day_offset = enrolled // max(1, per_day_capacity)
-            db.add(Enrollment(
-                lead_id=lead.id, sequence_id=seq.id, mailbox_id=mb.id,
-                next_send_at=now + timedelta(days=day_offset,
-                                             minutes=random.randint(0, 120)),
-            ))
-            lead.status = "enrolled"
-            enrolled += 1
-        log(db, "enroll", f"Enrolled {enrolled} leads into '{seq.name}' "
-                          f"across {len(mailboxes)} mailboxes "
-                          f"(~{per_day_capacity}/day capacity)")
-        db.commit()
-        return RedirectResponse("/", status_code=303)
-    finally:
-        db.close()
-
-
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -545,7 +561,7 @@ def send_selected(request: Request, step: int = Form(...), ids: str = Form(""),
         chosen = _chosen_mailbox(db, mailbox_id)
         actives = (db.query(Mailbox).filter(Mailbox.active.is_(True))
                    .order_by(Mailbox.id).all())
-        c = {"sent": 0, "capped": 0, "skipped": 0, "no_mailbox": 0}
+        c = {"sent": 0, "skipped": 0, "no_mailbox": 0}
         if not chosen and not actives:
             return RedirectResponse(
                 f"/leads?bulk=1&bstep={step}&bnomb={len(lead_ids)}",
@@ -568,15 +584,13 @@ def send_selected(request: Request, step: int = Form(...), ids: str = Form(""),
             r = send_enrollment_step(db, enr, step, cc=cc_list, bcc=bcc_list)
             if r == "sent":
                 c["sent"] += 1
-            elif r == "capped":
-                c["capped"] += 1
             elif r == "no_mailbox":
                 c["no_mailbox"] += 1
             else:                               # out_of_order / stopped / done
                 c["skipped"] += 1
         db.commit()
         return RedirectResponse(
-            f"/leads?bulk=1&bstep={step}&bsent={c['sent']}&bcapped={c['capped']}"
+            f"/leads?bulk=1&bstep={step}&bsent={c['sent']}"
             f"&bskip={c['skipped']}&bnomb={c['no_mailbox']}", status_code=303)
     finally:
         db.close()
@@ -683,6 +697,7 @@ def mailboxes_page(request: Request, mb: str = "", who: str = ""):
         return templates.TemplateResponse(request, "mailboxes.html",
                                           ctx(request, db, mailboxes=boxes,
                                               mb_feedback=feedback,
+                                              sent_today_map=sent_today_counts(db),
                                               sig_previews=sig_previews))
     finally:
         db.close()

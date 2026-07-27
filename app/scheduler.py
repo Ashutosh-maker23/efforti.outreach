@@ -1,7 +1,8 @@
 """Background jobs: process due sends + poll IMAP for replies and bounces.
 
 Safety rails enforced here, in order:
-  1. Mailbox active + under effective (warm-up-ramped) daily cap
+  1. Mailbox active (NO daily send cap — you can send as many as you like; the
+     warm-up ramp on the Mailboxes page is advisory guidance only, not enforced)
   2. Lead not suppressed / not replied / not bounced
   3. Send only inside the lead's local business hours (default 09:00-17:00)
   4. Random jitter so sends don't fire in bursts
@@ -11,20 +12,90 @@ import email as email_lib
 import imaplib
 import os
 import random
+import re
 from datetime import datetime, timedelta, timezone
+from email.header import decode_header, make_header
 
 from .emailer import send
-from .models import (Enrollment, Event, Lead, Mailbox, Message, SessionLocal,
-                     Suppression, log, utcnow)
+from .enrich import ensure_personalization
+from .models import (Enrollment, Event, Lead, Mailbox, Message, Reply,
+                     SessionLocal, Suppression, log, utcnow)
 
 BUSINESS_START = int(os.environ.get("BUSINESS_HOUR_START", "9"))
 BUSINESS_END = int(os.environ.get("BUSINESS_HOUR_END", "17"))
 BOUNCE_PAUSE_THRESHOLD = float(os.environ.get("BOUNCE_PAUSE_THRESHOLD", "0.03"))
 JITTER_MAX_MIN = int(os.environ.get("JITTER_MAX_MINUTES", "45"))
+# How far back to scan each inbox for replies. We look at read AND unread mail
+# (a reply you already opened in Gmail is marked \Seen, so UNSEEN-only misses it)
+# and dedupe by Message-ID, so a wide window is safe.
+REPLY_LOOKBACK_DAYS = int(os.environ.get("REPLY_LOOKBACK_DAYS", "30"))
+REPLY_SCAN_LIMIT = int(os.environ.get("REPLY_SCAN_LIMIT", "200"))
 
 BOUNCE_SUBJECT_MARKERS = ("delivery status notification", "undeliverable",
                           "mail delivery failed", "returned mail",
                           "delivery incomplete", "failure notice")
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _decode_hdr(raw: str) -> str:
+    """Decode an RFC 2047 encoded header (e.g. '=?UTF-8?…?=') to plain text."""
+    if not raw:
+        return ""
+    try:
+        return str(make_header(decode_header(raw)))
+    except Exception:
+        return str(raw)
+
+
+def _referenced_ids(msg) -> list:
+    """Message-IDs this inbound message threads onto (In-Reply-To / References).
+    If any matches an ID we generated when sending, the reply is ours — even when
+    it comes from a different or self address."""
+    ids = []
+    for h in ("In-Reply-To", "References"):
+        ids.extend(re.findall(r"<[^>]+>", msg.get(h) or ""))
+    return ids
+
+
+def _reply_snippet(msg, limit: int = 1200) -> str:
+    """Best-effort readable body of an inbound reply: prefer text/plain, fall back
+    to stripped HTML, then drop the quoted history so the NEW text reads cleanly."""
+    text, html = "", ""
+    parts = msg.walk() if msg.is_multipart() else [msg]
+    for part in parts:
+        if "attachment" in (part.get("Content-Disposition") or ""):
+            continue
+        ctype = part.get_content_type()
+        if ctype not in ("text/plain", "text/html"):
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            decoded = payload.decode(part.get_content_charset() or "utf-8",
+                                     errors="replace")
+        except Exception:
+            continue
+        if ctype == "text/plain" and not text:
+            text = decoded
+        elif ctype == "text/html" and not html:
+            html = decoded
+    body = text or _TAG_RE.sub(" ", html)
+    body = body.replace("\r\n", "\n")
+    kept = []
+    for line in body.split("\n"):
+        s = line.strip()
+        low = s.lower()
+        if s.startswith(">"):                        # quoted line
+            continue
+        if low.startswith("-----original message") or set(s) == {"_"}:
+            break
+        if low.startswith("on ") and low.endswith("wrote:"):
+            break
+        kept.append(line)
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip() or body.strip()
+    return cleaned[:limit]
 
 
 def in_business_hours(lead: Lead, now_utc: datetime) -> bool:
@@ -58,7 +129,7 @@ def _do_sends(db, now, manual: bool):
            .limit(batch).all())
 
     suppressed = {s.email for s in db.query(Suppression).all()}
-    stats = {"sent": 0, "capped": 0, "off_hours": 0, "suppressed": 0,
+    stats = {"sent": 0, "off_hours": 0, "suppressed": 0,
              "no_mailbox": 0, "failed": 0, "finished": 0, "manual": manual}
 
     for enr in due:
@@ -74,11 +145,9 @@ def _do_sends(db, now, manual: bool):
             stats["no_mailbox"] += 1
             continue
 
-        roll_daily_counters(db, mailbox, today)
-        if mailbox.sent_today >= mailbox.effective_cap():
-            enr.next_send_at = now + timedelta(hours=3)
-            stats["capped"] += 1
-            continue
+        roll_daily_counters(db, mailbox, today)   # keep the "sent today" tally fresh
+        # No daily cap — send volume is the user's call (the Mailboxes page only
+        # recommends a warm-up ramp for deliverability; nothing is enforced).
 
         # Business-hours gate applies only to the automatic scheduler. A manual
         # click sends regardless of the local clock.
@@ -93,6 +162,11 @@ def _do_sends(db, now, manual: bool):
             stats["finished"] += 1
             continue
         step = steps[enr.current_step]
+
+        # Primary email only: research the company and write the brand-specific
+        # intro before sending (cached, so it's a no-op after the first time).
+        if enr.current_step == 0:
+            ensure_personalization(db, lead)
 
         ok = send(db, mailbox, lead, enr, step.subject, step.body,
                   enr.current_step)
@@ -127,20 +201,19 @@ def process_due_sends():
         db.close()
 
 
-def send_enrollment_step(db, enr, step_index, respect_cap=True,
-                         cc=None, bcc=None):
+def send_enrollment_step(db, enr, step_index, cc=None, bcc=None):
     """Send ONE specific step for one enrollment, right now. This powers the
     per-lead 'Send first email' / 'Send follow-up N' buttons and the
     'send to selected' action. Returns a short status string:
 
       sent · stopped (replied/bounced/opted out) · no_mailbox · out_of_order
-      (that step isn't this lead's next one) · capped (daily limit) · done
-      (whole sequence finished) · failed.
+      (that step isn't this lead's next one) · done (whole sequence finished) ·
+      failed.
 
     Order is enforced — you can only send a lead's NEXT unsent step, so a
     follow-up can never jump ahead of the first email. Business hours are
-    ignored (you picked the moment); daily caps and opt-outs are respected.
-    The caller commits.
+    ignored (you picked the moment) and there is NO daily cap — you can send as
+    many as you like; only opt-outs/replies/bounces stop a send. The caller commits.
     """
     now = utcnow()
     today = now.strftime("%Y-%m-%d")
@@ -155,10 +228,12 @@ def send_enrollment_step(db, enr, step_index, respect_cap=True,
         return "done"
     if step_index != enr.current_step:
         return "out_of_order"
-    roll_daily_counters(db, mailbox, today)
-    if respect_cap and mailbox.sent_today >= mailbox.effective_cap():
-        return "capped"
+    roll_daily_counters(db, mailbox, today)   # keep the "sent today" tally fresh
     step = steps[step_index]
+    # Primary email only: research the company and write the brand-specific intro
+    # before sending (cached on the lead, so re-sends and follow-ups don't re-run).
+    if step_index == 0:
+        ensure_personalization(db, lead)
     if not send(db, mailbox, lead, enr, step.subject, step.body, step_index,
                 cc=cc, bcc=bcc):
         return "failed"
@@ -205,37 +280,80 @@ def _extract_target_email(msg, kind: str) -> str:
     return ""
 
 
+def _match_lead(db, msg, known_leads, from_addr):
+    """Tie an inbound reply to the lead we contacted. Prefer thread headers
+    (In-Reply-To / References -> a Message-ID we sent) so in-thread replies match
+    even from a different or self address; fall back to the sender being a lead."""
+    for rid in _referenced_ids(msg):
+        our = db.query(Message).filter(Message.message_id == rid).first()
+        if our:
+            lead = known_leads.get(our.lead_email)
+            if lead:
+                return lead
+    return known_leads.get(from_addr)
+
+
 def poll_inboxes():
-    """Checks each mailbox for replies and bounces."""
+    """Check each active mailbox's inbox for replies and bounces, and STORE each
+    real reply (from, subject, body snippet, which account received it) so it's
+    readable in the app — not merely counted.
+
+    Scans read + unread mail from the last REPLY_LOOKBACK_DAYS using BODY.PEEK
+    (never changes the read/unread state) and dedupes on the inbound Message-ID,
+    so a reply you already opened in Gmail is still picked up exactly once."""
     db = SessionLocal()
     try:
         known_leads = {l.email: l for l in db.query(Lead).all()}
+        seen = {r.imap_message_id for r in db.query(Reply.imap_message_id).all()
+                if r.imap_message_id}
+        since = (utcnow() - timedelta(days=REPLY_LOOKBACK_DAYS)).strftime("%d-%b-%Y")
         for mailbox in db.query(Mailbox).filter(Mailbox.active.is_(True)).all():
             try:
                 imap = imaplib.IMAP4_SSL(mailbox.imap_host)
                 imap.login(mailbox.login_email(), mailbox.app_password)
                 imap.select("INBOX")
-                _, data = imap.search(None, "UNSEEN")
-                for num in (data[0].split() if data and data[0] else []):
-                    _, msg_data = imap.fetch(num, "(RFC822)")
-                    msg = email_lib.message_from_bytes(msg_data[0][1])
-                    kind = _classify_inbound(msg)
-                    target = _extract_target_email(msg, kind)
-                    lead = known_leads.get(target)
-                    if not lead:
+                _, data = imap.search(None, "SINCE", since)
+                nums = (data[0].split() if data and data[0] else [])[-REPLY_SCAN_LIMIT:]
+                for num in reversed(nums):            # newest first
+                    _, msg_data = imap.fetch(num, "(BODY.PEEK[])")
+                    if not msg_data or not msg_data[0]:
                         continue
-                    if kind == "bounce":
+                    msg = email_lib.message_from_bytes(msg_data[0][1])
+                    imap_mid = (msg.get("Message-ID") or "").strip()
+                    if imap_mid and imap_mid in seen:
+                        continue
+
+                    if _classify_inbound(msg) == "bounce":
+                        lead = known_leads.get(_extract_target_email(msg, "bounce"))
+                        if not lead or lead.status == "bounced":
+                            continue                 # unknown or already handled
                         lead.status = "bounced"
                         db.add(Suppression(email=lead.email, reason="bounced"))
                         mailbox.bounces_7d += 1
                         _halt(db, lead, "halted_bounce")
-                        log(db, "bounce", f"{lead.email} bounced "
-                                          f"(via {mailbox.email})")
-                    else:
+                        log(db, "bounce", f"{lead.email} bounced (via {mailbox.email})")
+                        continue
+
+                    # --- genuine reply ---
+                    from_name, from_addr = email_lib.utils.parseaddr(
+                        msg.get("From") or "")
+                    from_addr = from_addr.lower()
+                    lead = _match_lead(db, msg, known_leads, from_addr)
+                    if not lead:
+                        continue                     # not a reply to our outreach
+                    subject = _decode_hdr(msg.get("Subject"))
+                    snippet = _reply_snippet(msg)
+                    db.add(Reply(mailbox_email=mailbox.email, lead_email=lead.email,
+                                 from_email=from_addr, from_name=from_name,
+                                 subject=subject, snippet=snippet,
+                                 imap_message_id=imap_mid))
+                    if imap_mid:
+                        seen.add(imap_mid)
+                    if lead.status != "replied":
                         lead.status = "replied"
                         _halt(db, lead, "halted_reply")
-                        log(db, "reply", f"REPLY from {lead.email} — sequence "
-                                         f"stopped. Check {mailbox.email} inbox.")
+                    log(db, "reply", f"REPLY from {lead.email} to {mailbox.email} — "
+                                     f"\"{(subject or snippet[:60]).strip()}\"")
                 imap.logout()
             except Exception as e:
                 log(db, "error", f"IMAP poll failed for {mailbox.email}: {e}")
