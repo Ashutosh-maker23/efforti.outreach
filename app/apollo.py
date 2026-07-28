@@ -1,13 +1,17 @@
 """Apollo API lead pull — auto-fetch C-suite contacts by ICP filters.
 
 Replaces manual CSV export: hit Apollo's People Search with your ICP filters,
-optionally reveal emails via the enrichment endpoint, then run every contact
+reveal emails via the (bulk) enrichment endpoint, then run every contact
 through the SAME gates as the CSV importer (syntax, suppression, dedupe,
 one-lead-per-domain).
 
-NOTE: Apollo's response shape and whether emails come back unlocked depend on
-your plan. Run a 1-page pull with your key first (via /leads/apollo_pull) and
-check the Activity log before pulling at volume. Requires APOLLO_API_KEY.
+NOTE: Apollo's People Search (api_search) returns OBFUSCATED previews — no
+email, no company domain, last name hidden — plus a per-record has_email flag.
+The real email/name/domain come only from a reveal call, which costs a credit.
+Because the search hides the domain, we cannot know which reveals are doomed
+(duplicate/out-of-scope) before spending the credit — so the pull is bounded by
+a reveal budget and stops early once no new leads are landing, instead of
+revealing the entire result set. Requires APOLLO_API_KEY.
 
 Docs: https://docs.apollo.io/reference/people-search
 """
@@ -21,9 +25,13 @@ from .models import Lead, Suppression, log
 
 # People Search (api_search) returns OBFUSCATED previews — no email, last name
 # hidden — plus a per-record has_email flag. Real name/email/company come only
-# from the enrichment call (people/match), which is what reveals + costs a credit.
+# from a reveal call, which is what unlocks the data + costs a credit.
 SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"
 MATCH_URL = "https://api.apollo.io/api/v1/people/match"
+# bulk_match reveals up to 10 people in ONE request — ~10x fewer calls than
+# matching one at a time, which is what made a full pull take many minutes.
+BULK_MATCH_URL = "https://api.apollo.io/api/v1/people/bulk_match"
+REVEAL_BATCH = 10                      # Apollo's bulk_match ceiling per request
 
 # Default Efforti ICP — the top 5 decision-makers per company, ranked by fit for
 # a "live visibility into team effort/blockers/risks" product:
@@ -90,9 +98,9 @@ def _search_page(titles, size_ranges, keywords, locations, page, per_page,
 
 
 def _enrich_person(person_id: str, retries: int = 2) -> dict:
-    """Enrichment call: reveals real name, email, and full org data for one
-    person (consumes an Apollo credit). Retries on rate-limit (429) with backoff
-    so a burst of reveals doesn't silently drop leads. Returns the person obj."""
+    """Reveal one person (real name, email, org). Consumes an Apollo credit.
+    Retries on rate-limit (429) with backoff. Kept for single-lead callers;
+    the bulk pull uses `_bulk_enrich` instead."""
     for attempt in range(retries + 1):
         try:
             r = requests.post(MATCH_URL, headers=_headers(),
@@ -109,6 +117,35 @@ def _enrich_person(person_id: str, retries: int = 2) -> dict:
                 continue
             return {}
     return {}
+
+
+def _bulk_enrich(ids, retries: int = 2) -> list:
+    """Reveal up to REVEAL_BATCH people in ONE call (people/bulk_match). Returns
+    a list of enriched person dicts (nulls/misses dropped). Each revealed person
+    consumes an Apollo credit — same cost as one-at-a-time, but ~10x fewer HTTP
+    round-trips, which is what makes a real pull finish in seconds not minutes.
+    Retries the whole batch on rate-limit (429)."""
+    ids = [i for i in ids if i][:REVEAL_BATCH]
+    if not ids:
+        return []
+    details = [{"id": i} for i in ids]
+    for attempt in range(retries + 1):
+        try:
+            r = requests.post(BULK_MATCH_URL, headers=_headers(),
+                              json={"details": details,
+                                    "reveal_personal_emails": False}, timeout=60)
+            if r.status_code == 429:               # rate limited — wait and retry
+                time.sleep(2 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            matches = r.json().get("matches") or []
+            return [m for m in matches if m]       # drop nulls (no-match rows)
+        except Exception:
+            if attempt < retries:
+                time.sleep(1.5)
+                continue
+            return []
+    return []
 
 
 def _usable_email(email: str) -> bool:
@@ -160,9 +197,11 @@ def preview_apollo(titles=None, size_ranges=None, keywords=None, locations=None,
                 break
             for p in people:
                 org = p.get("organization") or {}
-                dom = _org_domain(org) or (org.get("name") or "").strip().lower()
-                if not dom:
-                    continue
+                # api_search hides the domain and often the org name; fall back
+                # to the person id so a real contact is never silently dropped
+                # from the count (the credit estimate must reflect every reveal).
+                dom = (_org_domain(org) or (org.get("name") or "").strip().lower()
+                       or f"id:{p.get('id', '')}")
                 if dom not in grouped:
                     if len(grouped) >= brands:
                         continue                 # brand scope reached
@@ -191,20 +230,28 @@ def preview_apollo(titles=None, size_ranges=None, keywords=None, locations=None,
 def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None,
                 seniorities=None, brands=20, per_brand=5,
                 max_pages=40, do_reveal=True) -> dict:
-    """Multi-thread pull: import up to `per_brand` top execs at up to `brands`
-    companies (default 5 execs × 20 brands = 100 targets).
+    """Import up to `per_brand` top execs at up to `brands` companies
+    (default 5 execs × 20 brands = 100 targets), running every revealed
+    contact through the same verify/dedupe/suppression/one-per-domain gates as
+    the CSV importer.
 
-    Instead of one random person per company, this deliberately gathers the
-    decision-making unit at each brand. It enforces a per-brand cap (counting
-    execs already in the DB from earlier pulls) and a brand-count cap, so the
-    scope is exactly `brands × per_brand`, never a random total. Reveals cost
-    ~1 Apollo credit each and only happen for contacts that pass the free-data
-    gates first.
+    Bounded by design. Apollo's search hides the company domain, so a reveal
+    (1 credit) is the only way to learn who a contact really is — we can't skip
+    a doomed reveal in advance. To keep a pull fast and cheap, this:
+      • reveals in bulk batches of 10 (people/bulk_match),
+      • caps the total reveals at a budget tied to the target,
+      • commits after every batch (partial progress always survives), and
+      • stops early once the brand scope is full or two pages in a row add
+        nothing new — instead of revealing every page of the result set.
     """
     target_total = brands * per_brand
+    # Reveal budget: a margin over the target covers duplicates and locked
+    # emails, with a hard ceiling so a run can never surprise-bill credits.
+    max_reveals = min(400, max(target_total, 20) * 2)
     stats = {"brands": brands, "per_brand": per_brand,
              "target_total": target_total, "fetched": 0, "has_email": 0,
              "imported": 0, "brands_filled": 0, "no_email": 0,
+             "reveals": 0, "reveal_budget": max_reveals,
              "skipped_suppressed": 0, "skipped_duplicate": 0,
              "skipped_brand_full": 0, "skipped_scope": 0,
              "skipped_invalid": 0, "exhausted": False}
@@ -235,9 +282,48 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             return False
         return True
 
+    def _consider(enriched: dict) -> bool:
+        """Run one revealed person through every gate; import if it passes.
+        Returns True only when a new Lead was added."""
+        f = _person_to_fields(enriched)
+        email = (f["email"] or "").lower()
+        if not _usable_email(email):
+            stats["no_email"] += 1
+            return False
+        if email in suppressed:
+            stats["skipped_suppressed"] += 1
+            return False
+        if email in existing_emails:
+            stats["skipped_duplicate"] += 1
+            return False
+        if verify_email(email, do_mx=False) != "ok":
+            stats["skipped_invalid"] += 1
+            return False
+        domain = normalize_domain(f["company_domain"]) or email.split("@", 1)[1]
+        if not _room(domain):
+            held = domain_counts.get(domain, 0) + brand_domains.get(domain, 0)
+            if held >= per_brand:
+                stats["skipped_brand_full"] += 1
+            else:
+                stats["skipped_scope"] += 1
+            return False
+        db.add(Lead(
+            email=email, first_name=f["first_name"], last_name=f["last_name"],
+            title=f["title"], company=f["company"], company_domain=domain,
+            company_size=f["company_size"], industry=f["industry"],
+            company_desc=f["company_desc"], trigger=f.get("trigger", ""),
+            source="apollo", status="verified", verify_result="ok",
+        ))
+        existing_emails.add(email)
+        brand_domains[domain] = brand_domains.get(domain, 0) + 1
+        stats["imported"] += 1
+        return True
+
+    stale_pages = 0                        # consecutive pages that added nothing
     try:
         for page in range(1, max_pages + 1):
-            if stats["imported"] >= target_total:
+            if stats["imported"] >= target_total or \
+                    stats["reveals"] >= max_reveals:
                 break
             data = _search_page(titles, size_ranges, keywords, locations,
                                 page, 100, seniorities)
@@ -245,66 +331,43 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             if not people:
                 stats["exhausted"] = True          # ran out of matching contacts
                 break
-            for p in people:
-                if stats["imported"] >= target_total:
+            stats["fetched"] += len(people)
+            # Only has_email contacts are worth a reveal; the rest are dead ends.
+            candidates = [p.get("id") for p in people
+                          if p.get("has_email") and p.get("id")]
+            stats["no_email"] += sum(1 for p in people if not p.get("has_email"))
+            imported_before_page = stats["imported"]
+
+            if do_reveal:
+                for i in range(0, len(candidates), REVEAL_BATCH):
+                    if stats["imported"] >= target_total or \
+                            stats["reveals"] >= max_reveals:
+                        break
+                    room = max_reveals - stats["reveals"]
+                    batch = candidates[i:i + REVEAL_BATCH][:room]
+                    if not batch:
+                        break
+                    revealed = _bulk_enrich(batch)
+                    stats["reveals"] += len(batch)
+                    stats["has_email"] += len(batch)
+                    # ids Apollo returned no match for still cost nothing usable.
+                    stats["no_email"] += max(0, len(batch) - len(revealed))
+                    for enriched in revealed:
+                        _consider(enriched)
+                        if stats["imported"] >= target_total:
+                            break
+                    db.commit()                    # partial progress survives
+                    time.sleep(0.2)                # gentle pacing between calls
+
+            # Early stop: if a whole page of reveals produced no new leads, the
+            # brand scope is full (or the pool is dry) and further pages can only
+            # add duplicates/out-of-scope — stop instead of grinding all 40 pages.
+            if stats["imported"] == imported_before_page:
+                stale_pages += 1
+                if len(brand_domains) >= brands or stale_pages >= 2:
                     break
-                stats["fetched"] += 1
-                if not p.get("has_email"):
-                    stats["no_email"] += 1
-                    continue
-                org = p.get("organization") or {}
-                sdom = _org_domain(org)
-                # Pre-skip on the FREE search domain when we already know this
-                # brand is full or out of scope — saves a wasted credit.
-                if sdom and not _room(sdom):
-                    held = domain_counts.get(sdom, 0) + brand_domains.get(sdom, 0)
-                    if held >= per_brand:
-                        stats["skipped_brand_full"] += 1
-                    else:
-                        stats["skipped_scope"] += 1
-                    continue
-
-                pid = p.get("id", "")
-                if not (do_reveal and pid):
-                    continue
-                stats["has_email"] += 1
-                enriched = _enrich_person(pid)
-                time.sleep(0.25)                   # be gentle on the rate limit
-                f = _person_to_fields(enriched)
-                email = f["email"].lower()
-                if not _usable_email(email):
-                    stats["no_email"] += 1
-                    continue
-                if email in suppressed:
-                    stats["skipped_suppressed"] += 1
-                    continue
-                if email in existing_emails:
-                    stats["skipped_duplicate"] += 1
-                    continue
-                if verify_email(email, do_mx=False) != "ok":
-                    stats["skipped_invalid"] += 1
-                    continue
-                domain = normalize_domain(f["company_domain"]) or \
-                    email.split("@", 1)[1]
-                if not _room(domain):
-                    held = domain_counts.get(domain, 0) + \
-                        brand_domains.get(domain, 0)
-                    if held >= per_brand:
-                        stats["skipped_brand_full"] += 1
-                    else:
-                        stats["skipped_scope"] += 1
-                    continue
-
-                db.add(Lead(
-                    email=email, first_name=f["first_name"], last_name=f["last_name"],
-                    title=f["title"], company=f["company"], company_domain=domain,
-                    company_size=f["company_size"], industry=f["industry"],
-                    company_desc=f["company_desc"], trigger=f.get("trigger", ""),
-                    source="apollo", status="verified", verify_result="ok",
-                ))
-                existing_emails.add(email)
-                brand_domains[domain] = brand_domains.get(domain, 0) + 1
-                stats["imported"] += 1
+            else:
+                stale_pages = 0
     except requests.HTTPError as e:
         log(db, "error", f"apollo pull HTTP error: {e}")
     except Exception as e:
@@ -314,10 +377,13 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     log(db, "import",
         f"Apollo pull: imported {stats['imported']} execs across "
         f"{stats['brands_filled']} brands (target {per_brand}×{brands}"
-        f"={target_total}) · {stats['fetched']} scanned · "
+        f"={target_total}) · {stats['reveals']} reveals · "
+        f"{stats['fetched']} scanned · "
         f"{stats['skipped_brand_full']} brand-full · "
         f"{stats['skipped_duplicate']} duplicate · "
         f"{stats['no_email']} without email"
-        + (" · pool exhausted" if stats["exhausted"] else ""))
+        + (" · pool exhausted" if stats["exhausted"] else "")
+        + (" · reveal budget reached" if stats["reveals"] >= max_reveals
+           and stats["imported"] < target_total else ""))
     db.commit()
     return stats

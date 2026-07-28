@@ -229,6 +229,12 @@ td .btn.sm{white-space:nowrap}
 .contact-sub{font-size:12px;color:var(--text-3)}
 .dontmail{color:var(--text-3);font-size:12px;cursor:pointer;background:none;border:0;padding:4px}
 .dontmail:hover{color:var(--bad)}
+.pager{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;font-size:12.5px}
+.pager .pager-btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
+.pager a.disabled{pointer-events:none;opacity:.4}
+.pager-jump{display:inline-flex;gap:4px;align-items:center}
+.pager-jump input{width:60px}
+.pager select{padding:4px 6px}
 </style>
 
 <h2 style="margin-bottom:2px">Your leads — pick who to email</h2>
@@ -302,6 +308,35 @@ td .btn.sm{white-space:nowrap}
   <input type="hidden" name="cc" id="bulkCc"><input type="hidden" name="bcc" id="bulkBcc">
 </form>
 
+{% macro pager() %}
+{% set ns = namespace(f='') %}
+{% if status_filter %}{% set ns.f = ns.f ~ '&status=' ~ status_filter %}{% endif %}
+{% if due_filter >= 0 %}{% set ns.f = ns.f ~ '&due=' ~ due_filter %}{% endif %}
+<div class="pager">
+  <span class="muted">{% if total_count %}Showing {{page_start}}–{{page_end}} of {{total_count}} leads{% else %}No leads{% endif %}</span>
+  {% if total_pages > 1 %}
+  <span class="pager-btns">
+    <a class="btn ghost sm {{ 'disabled' if page <= 1 }}" href="/leads?page=1&per_page={{per_page}}{{ns.f}}">« First</a>
+    <a class="btn ghost sm {{ 'disabled' if page <= 1 }}" href="/leads?page={{page-1}}&per_page={{per_page}}{{ns.f}}">‹ Prev</a>
+    <span class="muted">Page {{page}} / {{total_pages}}</span>
+    <a class="btn ghost sm {{ 'disabled' if page >= total_pages }}" href="/leads?page={{page+1}}&per_page={{per_page}}{{ns.f}}">Next ›</a>
+    <a class="btn ghost sm {{ 'disabled' if page >= total_pages }}" href="/leads?page={{total_pages}}&per_page={{per_page}}{{ns.f}}">Last »</a>
+    <form class="pager-jump" method="get" action="/leads">
+      <input type="hidden" name="per_page" value="{{per_page}}">
+      {% if status_filter %}<input type="hidden" name="status" value="{{status_filter}}">{% endif %}
+      {% if due_filter >= 0 %}<input type="hidden" name="due" value="{{due_filter}}">{% endif %}
+      <input type="number" name="page" min="1" max="{{total_pages}}" value="{{page}}" aria-label="Go to page">
+      <button class="btn ghost sm">Go</button>
+    </form>
+    <select onchange="location.href='/leads?page=1&per_page='+this.value+'{{ns.f}}'" aria-label="Rows per page">
+      {% for pp in [50,100,200,500] %}<option value="{{pp}}" {{ 'selected' if per_page == pp }}>{{pp}} / page</option>{% endfor %}
+    </select>
+  </span>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{{ pager() }}
 <div class="tbl"><table>
   <thead><tr><th style="width:34px"></th><th>Contact</th><th>Company</th><th>Custom intro</th><th>Outreach</th><th style="width:36px"></th></tr></thead>
   <tbody>
@@ -343,6 +378,7 @@ td .btn.sm{white-space:nowrap}
   {% endfor %}
   </tbody>
 </table></div>
+{{ pager() }}
 
 <script>
 (function(){

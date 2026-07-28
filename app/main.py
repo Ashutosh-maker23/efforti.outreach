@@ -316,41 +316,76 @@ def _ensure_enrollment(db, lead, mailbox):
     return enr
 
 
-def _leads_ctx(request, db, status="", due=-1, **extra):
+def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
     """Shared context for the Leads page (used by the page and the preview)."""
     mb = active_mailbox(request, db)
-    q = db.query(Lead).order_by(Lead.id.desc())
+    # Build the filter once so the pager, the step counts and the table all
+    # describe the same set. `base` is unordered (used for counts/aggregates);
+    # ordering + pagination are applied to the view below.
+    conds = []
     if mb:
         # This mailbox's leads (enrolled to it) + the shared verified pool.
         enrolled_ids = [e.lead_id for e in db.query(Enrollment.lead_id)
                         .filter(Enrollment.mailbox_id == mb.id)]
-        q = q.filter(or_(Lead.id.in_(enrolled_ids), Lead.status == "verified"))
+        conds.append(or_(Lead.id.in_(enrolled_ids), Lead.status == "verified"))
     if status:
-        q = q.filter(Lead.status == status)
-    leads = q.limit(500).all()
-    prog, total = _lead_progress(db, leads)
+        conds.append(Lead.status == status)
+    base = db.query(Lead).filter(*conds)
 
-    # Live "next step due" breakdown, straight from each lead's real send progress
-    # (0 = first email, 1 = follow-up 1, ...). Powers the step-filter chips and the
-    # counts on them — every number is computed from the DB, none are cached/mocked.
+    # Steps in the active sequence (0 = first email, 1.. = follow-ups).
+    _seq = db.query(Sequence).filter(Sequence.active.is_(True)).first()
+    n_steps = len(_seq.steps) if _seq and _seq.steps else 3
+
+    # "Ready to send" breakdown across the WHOLE filtered set (not just the
+    # visible page), so the dropdown counts match the real data. A lead's next
+    # step needs only its status + furthest active-enrollment step (sent messages
+    # don't change it); active enrollments are few, so this stays cheap.
+    STOPPED = ("replied", "bounced", "unsubscribed")
+    enr_step = dict(db.query(Enrollment.lead_id, func.max(Enrollment.current_step))
+                    .filter(Enrollment.status == "active")
+                    .group_by(Enrollment.lead_id).all())
     due_counts = {}
-    for l in leads:
-        p = prog.get(l.id)
-        if p and p["state"] == "ready" and p["next"] is not None:
-            due_counts[p["next"]] = due_counts.get(p["next"], 0) + 1
+    for lid, lstatus in base.with_entities(Lead.id, Lead.status).all():
+        if lstatus in STOPPED:
+            continue
+        step = enr_step.get(lid, 0)
+        if step < n_steps:                       # not yet finished the sequence
+            due_counts[step] = due_counts.get(step, 0) + 1
 
-    # When a step filter is active, narrow the table to leads whose NEXT email is
-    # exactly that step — so a bulk send hits one clean category at a time.
-    if due >= 0:
-        leads = [l for l in leads
-                 if (prog.get(l.id) or {}).get("state") == "ready"
-                 and (prog.get(l.id) or {}).get("next") == due]
+    # When a step filter is active, narrow at the DB level so pagination walks
+    # every match across all pages — not just whatever landed on this page.
+    view = base
+    if due == 0:                                 # first email not yet sent
+        past_first = [lid for lid, s in enr_step.items() if s >= 1]
+        view = base.filter(Lead.status.notin_(STOPPED))
+        if past_first:
+            view = view.filter(~Lead.id.in_(past_first))
+    elif due > 0:                                # specific follow-up due next
+        ready_ids = [lid for lid, s in enr_step.items()
+                     if s == due and due < n_steps]
+        view = base.filter(Lead.id.in_(ready_ids or [-1]),
+                           Lead.status.notin_(STOPPED))
+
+    # Page through the (optionally filtered) list instead of capping at 500.
+    # per_page is clamped and page is snapped into range, so a stale/oob ?page=
+    # never lands on a blank table.
+    per_page = max(10, min(500, per_page))
+    total_count = view.count()
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    leads = (view.order_by(Lead.id.desc())
+             .offset((page - 1) * per_page).limit(per_page).all())
+    page_start = (page - 1) * per_page + 1 if leads else 0
+    page_end = (page - 1) * per_page + len(leads)
+    prog, _ = _lead_progress(db, leads)
 
     return ctx(request, db, active_mb=mb, leads=leads,
-               progress=prog, total_steps=total,
-               step_labels=[_step_label(i, short=True) for i in range(total)],
+               progress=prog, total_steps=n_steps,
+               step_labels=[_step_label(i, short=True) for i in range(n_steps)],
                due_counts=due_counts, due_filter=due,
                status_filter=status,
+               page=page, per_page=per_page, total_pages=total_pages,
+               total_count=total_count, page_start=page_start, page_end=page_end,
                mailbox_count=db.query(Mailbox).filter(Mailbox.active.is_(True)).count(),
                researched_pool=db.query(Lead).filter(
                    Lead.status.in_(["verified", "enrolled"]),
@@ -360,7 +395,8 @@ def _leads_ctx(request, db, status="", due=-1, **extra):
 
 
 @app.get("/leads", response_class=HTMLResponse)
-def leads_page(request: Request, status: str = "", due: int = -1, pulled: int = 0,
+def leads_page(request: Request, status: str = "", due: int = -1,
+               page: int = 1, per_page: int = 100, pulled: int = 0,
                brands: int = 0, per_brand: int = 0, brands_filled: int = 0,
                fetched: int = 0, imported: int = 0, brand_full: int = 0,
                dupe: int = 0, no_email: int = 0, exhausted: int = 0,
@@ -395,7 +431,8 @@ def leads_page(request: Request, status: str = "", due: int = -1, pulled: int = 
                              "skipped": bskip, "no_mailbox": bnomb,
                              "label": _step_label(bstep) if bstep >= 0 else ""}
         return templates.TemplateResponse(request, "leads.html", _leads_ctx(
-            request, db, status=status, due=due, pull_result=pull_result,
+            request, db, status=status, due=due, page=page, per_page=per_page,
+            pull_result=pull_result,
             send_feedback=send_feedback, enrich_result=enrich_result,
             research_result=research_result))
     finally:
