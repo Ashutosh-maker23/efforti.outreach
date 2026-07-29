@@ -23,9 +23,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_
 
 from .analytics import compute as compute_analytics
-from .apollo import (DEFAULT_KEYWORDS, INDUSTRY_OPTIONS, SIZE_PRESETS,
+from .apollo import (COMPANY_TRAITS, DEFAULT_KEYWORDS, INDUSTRY_OPTIONS,
+                     SIZE_PRESETS,
                      industry_hints, industry_tags, preview_apollo,
-                     pull_apollo)
+                     pull_apollo, trait_hints, trait_tags)
 from .emailer import signature_preview_html, verify_credentials
 from .enrich import enrich_leads
 from .importer import import_csv
@@ -397,6 +398,7 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
                    Lead.company_research.isnot(None)).count(),
                apollo_default_keywords=", ".join(DEFAULT_KEYWORDS),
                industry_options=INDUSTRY_OPTIONS,
+               company_traits=COMPANY_TRAITS,
                **extra)
 
 
@@ -447,38 +449,46 @@ def leads_page(request: Request, status: str = "", due: int = -1,
         db.close()
 
 
-def _apollo_filters(industries, keywords, locations, size_range):
+def _apollo_filters(industries, traits, keywords, locations, size_range):
     """Shared parsing for the Apollo form fields.
 
-    `industries` is the comma-joined list of industry slugs picked in the
-    multi-select dropdown. Each maps to Apollo keyword tags (bias the search)
-    and to ICP scorer hints (count the vertical as on-target). Any free-text in
-    `keywords` is merged in on top. Selecting nothing and leaving keywords blank
-    falls back to the broad-tech DEFAULT_KEYWORDS (handled downstream).
-    Returns (keyword_tags, locations, size_ranges, target_hints)."""
-    slugs = [s.strip() for s in (industries or "").split(",") if s.strip()]
+    `industries` (vertical) and `traits` (who-they-sell-to / how-they-operate)
+    are comma-joined slug lists from the two multi-select dropdowns. Each slug
+    maps to Apollo keyword tags (bias the free search) and to ICP scorer hints
+    (count a matching revealed vertical as on-target). Any free-text in
+    `keywords` is merged on top. Selecting nothing anywhere falls back to the
+    broad-tech DEFAULT_KEYWORDS (handled downstream). Returns
+    (keyword_tags, locations, size_ranges, target_hints)."""
+    ind = [s.strip() for s in (industries or "").split(",") if s.strip()]
+    trt = [s.strip() for s in (traits or "").split(",") if s.strip()]
     custom = [k.strip() for k in (keywords or "").split(",") if k.strip()]
-    # Industry tags first (curated), then any custom keywords, de-duplicated.
+    # Curated tags first (industry, then trait), then any custom keywords,
+    # de-duplicated case-insensitively.
     tags, seen = [], set()
-    for t in industry_tags(slugs) + custom:
+    for t in industry_tags(ind) + trait_tags(trt) + custom:
         tl = t.lower()
         if tl not in seen:
             seen.add(tl)
             tags.append(t)
     # Nothing chosen at all -> the broad-tech default ICP bias (what the UI
-    # promises). An explicit pick (industries and/or custom keywords) replaces
-    # it so "Fintech" means fintech, not fintech + everything.
+    # promises). Any explicit pick replaces it so "Fintech" means fintech, not
+    # fintech + everything.
     kw = tags or list(DEFAULT_KEYWORDS)
     loc = [l.strip() for l in (locations or "").split(",") if l.strip()] or None
     sizes = SIZE_PRESETS.get(size_range) or SIZE_PRESETS["startup"]
-    hints = industry_hints(slugs) or None
-    return kw, loc, sizes, hints
+    # Merge + de-dupe scorer hints from both pickers.
+    hints, hseen = [], set()
+    for h in industry_hints(ind) + trait_hints(trt):
+        if h not in hseen:
+            hseen.add(h)
+            hints.append(h)
+    return kw, loc, sizes, (hints or None)
 
 
 @app.post("/leads/apollo_preview", response_class=HTMLResponse)
 def apollo_preview(request: Request, brands: int = Form(20),
                    per_brand: int = Form(5), industries: str = Form(""),
-                   keywords: str = Form(""),
+                   traits: str = Form(""), keywords: str = Form(""),
                    locations: str = Form(""), size_range: str = Form("startup"),
                    remote_first: str = Form("")):
     """Free search-only preview: show who Apollo has, grouped by brand, before
@@ -489,11 +499,11 @@ def apollo_preview(request: Request, brands: int = Form(20),
     try:
         brands = max(1, min(100, brands))
         per_brand = max(1, min(10, per_brand))
-        kw, loc, sizes, _hints = _apollo_filters(industries, keywords,
+        kw, loc, sizes, _hints = _apollo_filters(industries, traits, keywords,
                                                  locations, size_range)
         preview = preview_apollo(keywords=kw, locations=loc, size_ranges=sizes,
                                  brands=brands, per_brand=per_brand)
-        pf = {"industries": industries, "keywords": keywords,
+        pf = {"industries": industries, "traits": traits, "keywords": keywords,
               "locations": locations, "size_range": size_range,
               "brands": brands, "per_brand": per_brand,
               "remote_first": (remote_first == "on")}
@@ -519,7 +529,8 @@ async def leads_import(request: Request, file: UploadFile = File(...),
 
 @app.post("/leads/apollo_pull")
 def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
-                industries: str = Form(""), keywords: str = Form(""),
+                industries: str = Form(""), traits: str = Form(""),
+                keywords: str = Form(""),
                 locations: str = Form(""), size_range: str = Form("startup"),
                 remote_first: str = Form("")):
     """Pull the top `per_brand` execs at up to `brands` companies from Apollo
@@ -530,7 +541,7 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
     try:
         brands = max(1, min(100, brands))
         per_brand = max(1, min(10, per_brand))
-        kw, loc, sizes, hints = _apollo_filters(industries, keywords,
+        kw, loc, sizes, hints = _apollo_filters(industries, traits, keywords,
                                                 locations, size_range)
         s = pull_apollo(db, keywords=kw, locations=loc, size_ranges=sizes,
                         brands=brands, per_brand=per_brand, target_hints=hints,

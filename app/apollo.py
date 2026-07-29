@@ -113,13 +113,43 @@ INDUSTRY_OPTIONS = [
 ]
 _INDUSTRY_BY_SLUG = {o["slug"]: o for o in INDUSTRY_OPTIONS}
 
+# Curated COMPANY-TRAIT menu for a SECOND UI multi-select. Where INDUSTRY_OPTIONS
+# is the *vertical* axis (what they build), this is the *who-they-sell-to /
+# how-they-operate* axis — the traits an operator can pick to steer a pull
+# toward Efforti's shape without guessing keywords. Same {tags, hints} contract
+# as INDUSTRY_OPTIONS: `tags` bias the FREE search, `hints` promote a matching
+# revealed industry to on-target when scoring. Complements (doesn't replace) the
+# industry picker and the remote-first toggle.
+COMPANY_TRAITS = [
+    {"slug": "b2b", "label": "B2B — sells to businesses",
+     "tags": ["b2b"], "hints": []},
+    {"slug": "b2c", "label": "B2C — sells to consumers",
+     "tags": ["b2c"], "hints": []},
+    {"slug": "plg", "label": "Product-led / self-serve",
+     "tags": ["product-led growth", "self-serve"], "hints": []},
+    {"slug": "enterprise", "label": "Enterprise-focused",
+     "tags": ["enterprise software", "enterprise"], "hints": []},
+    {"slug": "smb", "label": "SMB / mid-market focused",
+     "tags": ["small business", "smb"], "hints": []},
+    {"slug": "agency", "label": "Agency / IT services (project delivery)",
+     "tags": ["agency", "it services", "consulting",
+              "software development services"],
+     "hints": ["agency", "consulting", "outsourcing", "it services",
+               "software development"]},
+    {"slug": "marketplace", "label": "Marketplace / platform",
+     "tags": ["marketplace", "platform"], "hints": ["marketplace"]},
+    {"slug": "mobile", "label": "Mobile-first app",
+     "tags": ["mobile app", "mobile application"], "hints": ["mobile"]},
+]
+_TRAIT_BY_SLUG = {o["slug"]: o for o in COMPANY_TRAITS}
 
-def industry_tags(slugs) -> list:
-    """Apollo keyword tags for the selected industry slugs (order-preserving,
+
+def _tags_for(slugs, table) -> list:
+    """Apollo keyword tags for the selected slugs (order-preserving,
     de-duplicated). Unknown slugs are ignored."""
     tags, seen = [], set()
     for slug in slugs or []:
-        opt = _INDUSTRY_BY_SLUG.get((slug or "").strip())
+        opt = table.get((slug or "").strip())
         for t in (opt["tags"] if opt else []):
             if t not in seen:
                 seen.add(t)
@@ -127,17 +157,33 @@ def industry_tags(slugs) -> list:
     return tags
 
 
-def industry_hints(slugs) -> list:
-    """ICP-scorer target hints (substrings) for the selected industry slugs."""
+def _hints_for(slugs, table) -> list:
+    """ICP-scorer target hints (substrings) for the selected slugs."""
     hints, seen = [], set()
     for slug in slugs or []:
-        opt = _INDUSTRY_BY_SLUG.get((slug or "").strip())
+        opt = table.get((slug or "").strip())
         for h in (opt["hints"] if opt else []):
             h = h.strip().lower()
             if h and h not in seen:
                 seen.add(h)
                 hints.append(h)
     return hints
+
+
+def industry_tags(slugs) -> list:
+    return _tags_for(slugs, _INDUSTRY_BY_SLUG)
+
+
+def industry_hints(slugs) -> list:
+    return _hints_for(slugs, _INDUSTRY_BY_SLUG)
+
+
+def trait_tags(slugs) -> list:
+    return _tags_for(slugs, _TRAIT_BY_SLUG)
+
+
+def trait_hints(slugs) -> list:
+    return _hints_for(slugs, _TRAIT_BY_SLUG)
 
 # Named headcount presets for the UI dropdown -> Apollo range strings.
 SIZE_PRESETS = {
