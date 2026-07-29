@@ -107,6 +107,37 @@ PRODUCT_HINT_RE = re.compile(
     r"artificial intelligence|developer|cloud|analytics|automation|fintech|"
     r"b2b|product|startup|tech(?:nology)?)\b", re.I)
 
+# Remote / distributed-team vocabulary. This is Efforti's sharpest-pain buyer:
+# a leader who literally cannot walk the floor, so "where is my team's effort
+# actually going" is a daily, felt problem. Apollo has NO native remote filter,
+# so we detect it from the REVEALED org's keywords + description. Deliberately
+# strict — we match remote-team phrases, never bare "remote"/"distributed"
+# (which would false-positive on "remote monitoring" / "distributed systems").
+REMOTE_RE = re.compile(
+    r"remote[-\s]?first"
+    r"|fully[-\s]remote"
+    r"|remote[-\s]?friendly"
+    r"|work[-\s]from[-\s](?:anywhere|home)"
+    r"|distributed[-\s](?:team|teams|workforce|company|first)"
+    r"|globally[-\s]distributed"
+    r"|remote[-\s](?:team|teams|work|workforce|culture|company)"
+    r"|async[-\s]?first",
+    re.I)
+
+
+def remote_signal(org: dict, fields: dict = None) -> bool:
+    """True when the revealed company's keywords/description show it's a
+    remote-first / distributed-team operation. Best-effort heuristic — a False
+    is 'no evidence', not 'proven co-located', since many genuinely-remote firms
+    don't advertise it in Apollo's data."""
+    org = org or {}
+    hay = " ".join([
+        " ".join(org.get("keywords") or []),
+        org.get("short_description") or "",
+        (fields or {}).get("company_desc") or "",
+    ])
+    return bool(REMOTE_RE.search(hay))
+
 # Titles that mean the person no longer holds (or only part-time holds) the
 # role the search matched on — a "Former CEO" or "Fractional CFO" is not the
 # economic buyer.
@@ -301,12 +332,17 @@ def prescreen_org(org: dict) -> tuple:
 
 
 def score_lead(fields: dict, org: dict, band: tuple,
-               extra_targets=None) -> dict:
+               extra_targets=None, prefer_remote=False) -> dict:
     """Score one REVEALED contact against the ICP. `fields` is the mapped Lead
     dict (from apollo._person_to_fields), `org` the raw revealed organization,
     `band` the (min,max) headcount actually requested, `extra_targets` the
     industry hint substrings from the user's dropdown selection (promote a
-    matching neutral industry to target). Never raises."""
+    matching neutral industry to target). `prefer_remote` turns the
+    remote/distributed signal into a strong preference: a remote-team company is
+    boosted harder AND a company with no remote evidence is penalised, so within
+    a remote-focused pull the distributed teams rise above the score bar and the
+    co-located ones fall below it (a preference, not a hard reject — we never
+    nuke a strong-fit company just for lacking a remote tag). Never raises."""
     org = org or {}
     reasons = []
 
@@ -378,6 +414,14 @@ def score_lead(fields: dict, org: dict, band: tuple,
     if hints:
         score += 10
         reasons.append("product signals: " + ", ".join(sorted(hints)[:4]))
+
+    # Remote / distributed team — the buyer who feels Efforti's pain hardest.
+    if REMOTE_RE.search(haystack):
+        score += 12 if prefer_remote else 6
+        reasons.append("remote/distributed team")
+    elif prefer_remote:
+        score -= 6
+        reasons.append("no remote-team signal")
 
     if n:
         if band_min and band_max and band_min <= n <= band_max:

@@ -125,9 +125,13 @@
       <input type="text" name="keywords" value="{{ preview_filters.keywords if preview_filters is defined else '' }}" placeholder="remote-first, developer tools">
       <label style="margin-top:12px">Company HQ locations <span class="muted">(optional — filters by the company's real headquarters)</span></label>
       <input type="text" name="locations" value="{{ preview_filters.locations if preview_filters is defined else '' }}" placeholder="India, United States">
+      <label style="display:flex;align-items:center;gap:9px;font-weight:600;margin-top:14px;cursor:pointer">
+        <input type="checkbox" name="remote_first" value="on" style="width:auto"{{ ' checked' if preview_filters is defined and preview_filters.remote_first }}>
+        Prefer remote-first / distributed teams <span class="muted" style="font-weight:400">— Efforti's best-fit buyer; ranks them to the top</span>
+      </label>
       <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-top:14px">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-        <span>Targets the <strong>top 5 decision-makers</strong> per brand: CEO/Founder · COO · Chief of Staff · CFO · CPO — <strong>verified emails only</strong>, exact titles. Every revealed contact is <strong>ICP-checked</strong> (industry, real headcount, funding &amp; startup signals) and, when you set locations, its <strong>real HQ is verified</strong> so Apollo's overseas leaks are dropped. No industry picked = a broad-tech default. Scope this pull: <strong id="apScope">up to 100 execs</strong>. <strong>Preview is free</strong> — reveal on import costs ~1 credit each.</span>
+        <span>Targets the <strong>top 5 decision-makers</strong> per brand: CEO/Founder · COO · Chief of Staff · CFO · CPO — <strong>verified emails only</strong>, exact titles. Every revealed contact is <strong>ICP-checked</strong> (industry, real headcount, funding &amp; startup signals) and, when you set locations, its <strong>real HQ is verified</strong> so Apollo's overseas leaks are dropped. No industry picked = a broad-tech default. <strong>Remote-first</strong>, when ticked, boosts distributed-team companies and drops clearly co-located ones below the bar (detected on import — Apollo has no remote filter). Scope this pull: <strong id="apScope">up to 100 execs</strong>. <strong>Preview is free</strong> — reveal on import costs ~1 credit each.</span>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px">
         <button class="btn ghost" formaction="/leads/apollo_preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Preview</button>
@@ -211,6 +215,7 @@
       <input type="hidden" name="size_range" value="{{preview_filters.size_range}}">
       <input type="hidden" name="brands" value="{{preview_filters.brands}}">
       <input type="hidden" name="per_brand" value="{{preview_filters.per_brand}}">
+      <input type="hidden" name="remote_first" value="{{ 'on' if preview_filters.remote_first else '' }}">
       <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>Import these — reveal up to {{preview.with_email}} emails (~{{preview.with_email}} credits)</button>
     </form>
   </div>

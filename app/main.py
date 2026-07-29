@@ -479,9 +479,12 @@ def _apollo_filters(industries, keywords, locations, size_range):
 def apollo_preview(request: Request, brands: int = Form(20),
                    per_brand: int = Form(5), industries: str = Form(""),
                    keywords: str = Form(""),
-                   locations: str = Form(""), size_range: str = Form("startup")):
+                   locations: str = Form(""), size_range: str = Form("startup"),
+                   remote_first: str = Form("")):
     """Free search-only preview: show who Apollo has, grouped by brand, before
-    spending any credits."""
+    spending any credits. (The remote-first preference only affects scoring on
+    import — Apollo can't detect remote in the free preview — so it's carried
+    through here purely to keep the checkbox state.)"""
     db = SessionLocal()
     try:
         brands = max(1, min(100, brands))
@@ -492,7 +495,8 @@ def apollo_preview(request: Request, brands: int = Form(20),
                                  brands=brands, per_brand=per_brand)
         pf = {"industries": industries, "keywords": keywords,
               "locations": locations, "size_range": size_range,
-              "brands": brands, "per_brand": per_brand}
+              "brands": brands, "per_brand": per_brand,
+              "remote_first": (remote_first == "on")}
         return templates.TemplateResponse(request, "leads.html", _leads_ctx(
             request, db, preview=preview, preview_filters=pf))
     finally:
@@ -516,10 +520,12 @@ async def leads_import(request: Request, file: UploadFile = File(...),
 @app.post("/leads/apollo_pull")
 def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
                 industries: str = Form(""), keywords: str = Form(""),
-                locations: str = Form(""), size_range: str = Form("startup")):
+                locations: str = Form(""), size_range: str = Form("startup"),
+                remote_first: str = Form("")):
     """Pull the top `per_brand` execs at up to `brands` companies from Apollo
     (default ICP). Enforces the per-brand cap + brand scope, and runs the same
-    verify/dedupe/suppression gates plus the ICP + genuine-location gates."""
+    verify/dedupe/suppression gates plus the ICP + genuine-location gates.
+    `remote_first` biases scoring toward remote/distributed-team companies."""
     db = SessionLocal()
     try:
         brands = max(1, min(100, brands))
@@ -527,7 +533,8 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
         kw, loc, sizes, hints = _apollo_filters(industries, keywords,
                                                 locations, size_range)
         s = pull_apollo(db, keywords=kw, locations=loc, size_ranges=sizes,
-                        brands=brands, per_brand=per_brand, target_hints=hints)
+                        brands=brands, per_brand=per_brand, target_hints=hints,
+                        prefer_remote=(remote_first == "on"))
         loc_skips = s["skipped_location"] + s["skipped_location_prereveal"]
         return RedirectResponse(
             f"/leads?pulled=1&brands={s['brands']}&per_brand={s['per_brand']}"

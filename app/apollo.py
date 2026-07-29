@@ -330,7 +330,8 @@ def preview_apollo(titles=None, size_ranges=None, keywords=None, locations=None,
 
 def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None,
                 seniorities=None, brands=20, per_brand=5,
-                max_pages=40, do_reveal=True, target_hints=None) -> dict:
+                max_pages=40, do_reveal=True, target_hints=None,
+                prefer_remote=False) -> dict:
     """Import up to `per_brand` top execs at up to `brands` companies
     (default 5 execs × 20 brands = 100 targets), running every revealed
     contact through the same verify/dedupe/suppression/one-per-domain gates as
@@ -341,7 +342,11 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     `locations` additionally enforces a GENUINE HQ-location gate (icp
     .location_match) that drops the overseas brands Apollo's search leaks, and
     `target_hints` (from the UI industry dropdown) count the chosen verticals
-    as on-target when scoring.
+    as on-target when scoring. `prefer_remote` biases scoring toward
+    remote-first / distributed-team companies (Efforti's sharpest-pain buyer):
+    remote teams are boosted and co-located ones penalised below the bar. Apollo
+    exposes no remote filter, so this is detected from the revealed company —
+    it therefore kicks in on import, not in the free preview.
 
     Bounded by design. Apollo's search hides the company domain, so a reveal
     (1 credit) is the only way to learn who a contact really is — we can't skip
@@ -364,7 +369,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
              "skipped_brand_full": 0, "skipped_scope": 0,
              "skipped_invalid": 0, "skipped_icp": 0, "skipped_prescreen": 0,
              "skipped_location": 0, "skipped_location_prereveal": 0,
-             "icp_reject_reasons": {}, "exhausted": False}
+             "remote_fit": 0, "icp_reject_reasons": {}, "exhausted": False}
     if not os.environ.get("APOLLO_API_KEY"):
         log(db, "error", "apollo pull skipped: APOLLO_API_KEY not set")
         return stats
@@ -423,13 +428,15 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         # ICP extraction: judge the REVEALED company/person against the ICP
         # (industry, real headcount, startup signals, live title) — this is
         # what keeps a 50-person restaurant group with a "CEO" out of the DB.
-        icp = score_lead(f, org_obj, band, target_hints)
+        icp = score_lead(f, org_obj, band, target_hints, prefer_remote)
         if icp["verdict"] != "pass":
             stats["skipped_icp"] += 1
             why = (icp["reasons"][0] if icp["reasons"] else "?").split(":")[0]
             tally = stats["icp_reject_reasons"]
             tally[why] = tally.get(why, 0) + 1
             return False
+        if "remote/distributed team" in icp["reasons"]:
+            stats["remote_fit"] += 1
         domain = normalize_domain(f["company_domain"]) or email.split("@", 1)[1]
         if not _room(domain):
             held = domain_counts.get(domain, 0) + brand_domains.get(domain, 0)
@@ -535,6 +542,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         f"{off_icp} off-ICP ({stats['skipped_prescreen']} pre-reveal"
         + (f"; top: {top_reasons}" if top_reasons else "") + ") · "
         + (f"{off_loc} wrong-location · " if off_loc else "")
+        + (f"{stats['remote_fit']} remote-first · " if prefer_remote else "")
         + f"{stats['skipped_brand_full']} brand-full · "
         f"{stats['skipped_duplicate']} duplicate · "
         f"{stats['no_email']} without email"
