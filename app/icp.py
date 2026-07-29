@@ -22,6 +22,14 @@ stored on the Lead so the UI can rank sends best-fit-first and show *why*.
 `prescreen_org()` is the free version of the same idea: it runs on obfuscated
 search previews (which sometimes carry industry / ticker) so unambiguous
 non-fits are dropped BEFORE a reveal credit is spent on them.
+
+`location_match()` is a SEPARATE, genuine location gate. Apollo's api_search
+honours `organization_locations` loosely — companies merely *operating* in a
+region (a sales office, a remote hire) come back for an HQ-in-India search — so
+picking "India" still leaks overseas brands. This checks the REVEALED
+company's real HQ (country/state/city/address, with the person's own location
+as a fallback) against the requested locations and drops the ones that don't
+actually match.
 """
 import os
 import re
@@ -79,6 +87,19 @@ TARGET_INDUSTRIES = {
 # Substring fallback — Apollo industry strings drift ("software development").
 TARGET_INDUSTRY_HINTS = ("software", "information technology", "internet",
                          "saas", "fintech")
+
+# Country-name aliases so a user typing "US"/"USA"/"UK" still matches Apollo's
+# canonical country strings. Keys and values are compared lower-cased.
+COUNTRY_ALIASES = {
+    "us": "united states", "usa": "united states",
+    "u.s.": "united states", "u.s.a.": "united states",
+    "united states of america": "united states", "america": "united states",
+    "uk": "united kingdom", "u.k.": "united kingdom",
+    "britain": "united kingdom", "great britain": "united kingdom",
+    "england": "united kingdom",
+    "uae": "united arab emirates",
+    "bharat": "india",
+}
 
 # Product/startup vocabulary in the org's keywords + description.
 PRODUCT_HINT_RE = re.compile(
@@ -178,8 +199,13 @@ def funding_signal(org: dict) -> tuple:
     return True, " ".join(p for p in parts if p).replace("  ", " ").strip()
 
 
-def _classify_industry(industry: str) -> str:
-    """'target' / 'smb' / 'blocked' / 'neutral' / 'unknown'."""
+def _classify_industry(industry: str, extra_targets=None) -> str:
+    """'target' / 'smb' / 'blocked' / 'neutral' / 'unknown'. `extra_targets` are
+    the industry hint substrings from the user's dropdown selection — a match
+    promotes an otherwise-neutral industry to 'target', so selecting "Logistics"
+    or "HR Tech" genuinely tightens scoring, not just the search. Institutional
+    blocks and SMB penalties still win over a hint (we never want a hospital,
+    even if the user picked HealthTech)."""
     ind = (industry or "").strip().lower()
     if not ind:
         return "unknown"
@@ -190,7 +216,73 @@ def _classify_industry(industry: str) -> str:
     if ind in TARGET_INDUSTRIES or any(h in ind
                                        for h in TARGET_INDUSTRY_HINTS):
         return "target"
+    if extra_targets and any(h and h in ind for h in extra_targets):
+        return "target"
     return "neutral"
+
+
+def _loc_tokens(value: str):
+    """Split a requested location into comparable tokens, each normalised
+    through COUNTRY_ALIASES ("US" -> "united states"). "Bengaluru, India"
+    -> {"bengaluru", "india"}."""
+    out = set()
+    for part in re.split(r"[,/|]", value or ""):
+        p = part.strip().lower()
+        if p:
+            out.add(COUNTRY_ALIASES.get(p, p))
+    return out
+
+
+def location_match(locations, org: dict, person: dict = None) -> tuple:
+    """Genuine HQ-location gate on a REVEALED record: (ok, detail).
+
+    Returns ok=True when no location was requested. Otherwise the company's real
+    location must match one of the requested ones. We look at the org's
+    country/state/city/address first (that's the HQ the ICP cares about) and
+    fall back to the person's own country only when the org carries no location
+    at all. Match is intentionally forgiving in ONE direction — a requested
+    "india" matches an org country "India" or an address "Bengaluru, India" —
+    but a determinable foreign country with no requested-token overlap is
+    rejected. When nothing locational is knowable we pass (rare post-reveal),
+    so sparse-but-valid records aren't nuked; the clear overseas leaks, which
+    all carry a country, are what this catches."""
+    wanted = set()
+    for loc in locations or []:
+        wanted |= _loc_tokens(loc)
+    if not wanted:
+        return True, ""
+
+    org = org or {}
+    person = person or {}
+    country = (org.get("country") or "").strip().lower()
+    country = COUNTRY_ALIASES.get(country, country)
+    # Everything we can compare against, most-authoritative first.
+    haystacks = [country,
+                 (org.get("state") or "").strip().lower(),
+                 (org.get("city") or "").strip().lower(),
+                 (org.get("raw_address") or org.get("street_address")
+                  or "").strip().lower()]
+    org_has_location = any(haystacks)
+
+    def hit(tokens_present):
+        return any(w in h for w in wanted for h in tokens_present if h)
+
+    if org_has_location:
+        if hit(haystacks):
+            return True, ""
+        # Org has a real location and none of it matches the request -> drop.
+        shown = country or next((h for h in haystacks[1:] if h), "?")
+        return False, f"HQ {shown} not in {sorted(wanted)}"
+
+    # No org location at all — fall back to the person's country before giving
+    # the benefit of the doubt.
+    pcountry = (person.get("country") or "").strip().lower()
+    pcountry = COUNTRY_ALIASES.get(pcountry, pcountry)
+    if pcountry:
+        if any(w in pcountry or pcountry in w for w in wanted):
+            return True, ""
+        return False, f"contact in {pcountry}, not {sorted(wanted)}"
+    return True, ""          # nothing knowable — don't over-reject
 
 
 # ---------------------------------------------------------------- verdicts
@@ -208,10 +300,13 @@ def prescreen_org(org: dict) -> tuple:
     return True, ""
 
 
-def score_lead(fields: dict, org: dict, band: tuple) -> dict:
+def score_lead(fields: dict, org: dict, band: tuple,
+               extra_targets=None) -> dict:
     """Score one REVEALED contact against the ICP. `fields` is the mapped Lead
     dict (from apollo._person_to_fields), `org` the raw revealed organization,
-    `band` the (min,max) headcount actually requested. Never raises."""
+    `band` the (min,max) headcount actually requested, `extra_targets` the
+    industry hint substrings from the user's dropdown selection (promote a
+    matching neutral industry to target). Never raises."""
     org = org or {}
     reasons = []
 
@@ -232,7 +327,7 @@ def score_lead(fields: dict, org: dict, band: tuple) -> dict:
     if (org.get("publicly_traded_symbol") or "").strip():
         return reject("public company")
 
-    ind_class = _classify_industry(fields.get("industry", ""))
+    ind_class = _classify_industry(fields.get("industry", ""), extra_targets)
     if ind_class == "blocked":
         return reject(f"blocked industry: {fields.get('industry')}")
 

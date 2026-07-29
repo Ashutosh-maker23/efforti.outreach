@@ -20,7 +20,7 @@ import time
 
 import requests
 
-from .icp import parse_band, prescreen_org, score_lead
+from .icp import location_match, parse_band, prescreen_org, score_lead
 from .importer import normalize_domain, verify_email
 from .models import Lead, Suppression, log
 
@@ -59,6 +59,85 @@ DEFAULT_SIZE_RANGES = ["21,50", "51,100", "101,200"]
 DEFAULT_KEYWORDS = ["software", "saas", "information technology",
                     "artificial intelligence", "fintech", "cloud",
                     "internet", "b2b"]
+
+# Curated industry menu for the UI multi-select. Each option maps to:
+#   • `tags`  — Apollo org keyword tags sent as q_organization_keyword_tags,
+#               biasing the FREE search toward that vertical, and
+#   • `hints` — substrings matched against the REVEALED industry so the ICP
+#               scorer counts the vertical as on-target (see icp.score_lead's
+#               extra_targets). One selection thus tightens BOTH search and
+#               scoring. Selecting none = the DEFAULT_KEYWORDS broad-tech bias.
+INDUSTRY_OPTIONS = [
+    {"slug": "saas", "label": "SaaS / Software",
+     "tags": ["saas", "software"],
+     "hints": ["software", "saas", "internet", "information technology"]},
+    {"slug": "fintech", "label": "Fintech / Financial Services",
+     "tags": ["fintech", "financial services", "payments"],
+     "hints": ["fintech", "financial", "payment", "banking", "insurance"]},
+    {"slug": "ai", "label": "AI / Machine Learning",
+     "tags": ["artificial intelligence", "machine learning"],
+     "hints": ["artificial intelligence", "machine learning", " ai ", "ai/"]},
+    {"slug": "ecommerce", "label": "E-commerce / Marketplaces",
+     "tags": ["e-commerce", "marketplace"],
+     "hints": ["e-commerce", "ecommerce", "marketplace", "consumer goods"]},
+    {"slug": "marketing", "label": "Marketing / AdTech",
+     "tags": ["marketing", "advertising", "martech"],
+     "hints": ["marketing", "advertising"]},
+    {"slug": "healthtech", "label": "HealthTech / Digital Health",
+     "tags": ["healthtech", "digital health", "health & wellness"],
+     "hints": ["health tech", "digital health", "biotechnology", "wellness"]},
+    {"slug": "edtech", "label": "EdTech / E-learning",
+     "tags": ["edtech", "e-learning", "education technology"],
+     "hints": ["e-learning", "edtech", "education technology"]},
+    {"slug": "cybersecurity", "label": "Cybersecurity",
+     "tags": ["cybersecurity", "information security"],
+     "hints": ["security", "cyber"]},
+    {"slug": "devtools", "label": "DevTools / Cloud / Infra",
+     "tags": ["developer tools", "cloud computing", "devops"],
+     "hints": ["cloud", "developer", "devops", "infrastructure"]},
+    {"slug": "data", "label": "Data / Analytics",
+     "tags": ["data analytics", "big data", "business intelligence"],
+     "hints": ["analytics", "big data", "data infrastructure"]},
+    {"slug": "hrtech", "label": "HR Tech / Future of Work",
+     "tags": ["hr tech", "human resources", "recruiting"],
+     "hints": ["human resources", "recruiting", "staffing"]},
+    {"slug": "logistics", "label": "Logistics / Supply Chain Tech",
+     "tags": ["logistics", "supply chain", "logtech"],
+     "hints": ["logistics", "supply chain", "transportation"]},
+    {"slug": "proptech", "label": "PropTech / Real Estate Tech",
+     "tags": ["proptech", "real estate technology"],
+     "hints": ["proptech", "real estate"]},
+    {"slug": "media", "label": "Media / Gaming / Creator",
+     "tags": ["media", "gaming", "creator economy"],
+     "hints": ["media", "gaming", "computer games", "entertainment"]},
+]
+_INDUSTRY_BY_SLUG = {o["slug"]: o for o in INDUSTRY_OPTIONS}
+
+
+def industry_tags(slugs) -> list:
+    """Apollo keyword tags for the selected industry slugs (order-preserving,
+    de-duplicated). Unknown slugs are ignored."""
+    tags, seen = [], set()
+    for slug in slugs or []:
+        opt = _INDUSTRY_BY_SLUG.get((slug or "").strip())
+        for t in (opt["tags"] if opt else []):
+            if t not in seen:
+                seen.add(t)
+                tags.append(t)
+    return tags
+
+
+def industry_hints(slugs) -> list:
+    """ICP-scorer target hints (substrings) for the selected industry slugs."""
+    hints, seen = [], set()
+    for slug in slugs or []:
+        opt = _INDUSTRY_BY_SLUG.get((slug or "").strip())
+        for h in (opt["hints"] if opt else []):
+            h = h.strip().lower()
+            if h and h not in seen:
+                seen.add(h)
+                hints.append(h)
+    return hints
 
 # Named headcount presets for the UI dropdown -> Apollo range strings.
 SIZE_PRESETS = {
@@ -217,6 +296,8 @@ def preview_apollo(titles=None, size_ranges=None, keywords=None, locations=None,
                 org = p.get("organization") or {}
                 if not prescreen_org(org)[0]:
                     continue    # unambiguous non-fit — a pull would skip it too
+                if not location_match(locations, org)[0]:
+                    continue    # HQ demonstrably outside the requested region
                 # api_search hides the domain and often the org name; fall back
                 # to the person id so a real contact is never silently dropped
                 # from the count (the credit estimate must reflect every reveal).
@@ -249,7 +330,7 @@ def preview_apollo(titles=None, size_ranges=None, keywords=None, locations=None,
 
 def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None,
                 seniorities=None, brands=20, per_brand=5,
-                max_pages=40, do_reveal=True) -> dict:
+                max_pages=40, do_reveal=True, target_hints=None) -> dict:
     """Import up to `per_brand` top execs at up to `brands` companies
     (default 5 execs × 20 brands = 100 targets), running every revealed
     contact through the same verify/dedupe/suppression/one-per-domain gates as
@@ -257,6 +338,10 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     that aren't a real fit — wrong industry, headcount out of band, public,
     free-mail, stale title, weak startup signals — are skipped, and every
     imported lead carries an icp_score/icp_reasons explaining its fit.
+    `locations` additionally enforces a GENUINE HQ-location gate (icp
+    .location_match) that drops the overseas brands Apollo's search leaks, and
+    `target_hints` (from the UI industry dropdown) count the chosen verticals
+    as on-target when scoring.
 
     Bounded by design. Apollo's search hides the company domain, so a reveal
     (1 credit) is the only way to learn who a contact really is — we can't skip
@@ -278,6 +363,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
              "skipped_suppressed": 0, "skipped_duplicate": 0,
              "skipped_brand_full": 0, "skipped_scope": 0,
              "skipped_invalid": 0, "skipped_icp": 0, "skipped_prescreen": 0,
+             "skipped_location": 0, "skipped_location_prereveal": 0,
              "icp_reject_reasons": {}, "exhausted": False}
     if not os.environ.get("APOLLO_API_KEY"):
         log(db, "error", "apollo pull skipped: APOLLO_API_KEY not set")
@@ -324,10 +410,20 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         if verify_email(email, do_mx=False) != "ok":
             stats["skipped_invalid"] += 1
             return False
+        # Genuine location gate: Apollo's search leaks companies that merely
+        # operate in the region, so verify the REVEALED HQ (org country/address,
+        # person country as fallback) against what was actually requested.
+        org_obj = enriched.get("organization") or {}
+        loc_ok, loc_why = location_match(locations, org_obj, enriched)
+        if not loc_ok:
+            stats["skipped_location"] += 1
+            tally = stats["icp_reject_reasons"]
+            tally["wrong location"] = tally.get("wrong location", 0) + 1
+            return False
         # ICP extraction: judge the REVEALED company/person against the ICP
         # (industry, real headcount, startup signals, live title) — this is
         # what keeps a 50-person restaurant group with a "CEO" out of the DB.
-        icp = score_lead(f, enriched.get("organization") or {}, band)
+        icp = score_lead(f, org_obj, band, target_hints)
         if icp["verdict"] != "pass":
             stats["skipped_icp"] += 1
             why = (icp["reasons"][0] if icp["reasons"] else "?").split(":")[0]
@@ -377,8 +473,14 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             for p in people:
                 if not (p.get("has_email") and p.get("id")):
                     continue
-                if not prescreen_org(p.get("organization") or {})[0]:
+                pre_org = p.get("organization") or {}
+                if not prescreen_org(pre_org)[0]:
                     stats["skipped_prescreen"] += 1
+                    continue
+                # If the obfuscated preview already carries a foreign HQ, skip
+                # it here and save the reveal credit entirely.
+                if not location_match(locations, pre_org)[0]:
+                    stats["skipped_location_prereveal"] += 1
                     continue
                 candidates.append(p.get("id"))
             stats["no_email"] += sum(1 for p in people if not p.get("has_email"))
@@ -421,6 +523,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
 
     stats["brands_filled"] = len(brand_domains)
     off_icp = stats["skipped_icp"] + stats["skipped_prescreen"]
+    off_loc = stats["skipped_location"] + stats["skipped_location_prereveal"]
     top_reasons = ", ".join(
         f"{why} ×{n}" for why, n in sorted(stats["icp_reject_reasons"].items(),
                                            key=lambda kv: -kv[1])[:3])
@@ -431,7 +534,8 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         f"{stats['fetched']} scanned · "
         f"{off_icp} off-ICP ({stats['skipped_prescreen']} pre-reveal"
         + (f"; top: {top_reasons}" if top_reasons else "") + ") · "
-        f"{stats['skipped_brand_full']} brand-full · "
+        + (f"{off_loc} wrong-location · " if off_loc else "")
+        + f"{stats['skipped_brand_full']} brand-full · "
         f"{stats['skipped_duplicate']} duplicate · "
         f"{stats['no_email']} without email"
         + (" · pool exhausted" if stats["exhausted"] else "")

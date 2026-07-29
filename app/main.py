@@ -23,7 +23,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_
 
 from .analytics import compute as compute_analytics
-from .apollo import (DEFAULT_KEYWORDS, SIZE_PRESETS, preview_apollo,
+from .apollo import (DEFAULT_KEYWORDS, INDUSTRY_OPTIONS, SIZE_PRESETS,
+                     industry_hints, industry_tags, preview_apollo,
                      pull_apollo)
 from .emailer import signature_preview_html, verify_credentials
 from .enrich import enrich_leads
@@ -395,6 +396,7 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
                    Lead.company_research != "",
                    Lead.company_research.isnot(None)).count(),
                apollo_default_keywords=", ".join(DEFAULT_KEYWORDS),
+               industry_options=INDUSTRY_OPTIONS,
                **extra)
 
 
@@ -403,7 +405,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                page: int = 1, per_page: int = 100, pulled: int = 0,
                brands: int = 0, per_brand: int = 0, brands_filled: int = 0,
                fetched: int = 0, imported: int = 0, brand_full: int = 0,
-               dupe: int = 0, no_email: int = 0, icp: int = 0,
+               dupe: int = 0, no_email: int = 0, icp: int = 0, loc: int = 0,
                exhausted: int = 0,
                one: str = "", bulk: int = 0, bsent: int = 0,
                bskip: int = 0, bnomb: int = 0, bstep: int = -1,
@@ -426,6 +428,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                            "brands_filled": brands_filled, "fetched": fetched,
                            "imported": imported, "brand_full": brand_full,
                            "dupe": dupe, "no_email": no_email, "icp": icp,
+                           "location": loc,
                            "target_total": brands * per_brand,
                            "exhausted": bool(exhausted)}
         send_feedback = None
@@ -444,17 +447,38 @@ def leads_page(request: Request, status: str = "", due: int = -1,
         db.close()
 
 
-def _apollo_filters(keywords, locations, size_range):
-    """Shared parsing for the Apollo form fields."""
-    kw = [k.strip() for k in keywords.split(",") if k.strip()] or None
-    loc = [l.strip() for l in locations.split(",") if l.strip()] or None
+def _apollo_filters(industries, keywords, locations, size_range):
+    """Shared parsing for the Apollo form fields.
+
+    `industries` is the comma-joined list of industry slugs picked in the
+    multi-select dropdown. Each maps to Apollo keyword tags (bias the search)
+    and to ICP scorer hints (count the vertical as on-target). Any free-text in
+    `keywords` is merged in on top. Selecting nothing and leaving keywords blank
+    falls back to the broad-tech DEFAULT_KEYWORDS (handled downstream).
+    Returns (keyword_tags, locations, size_ranges, target_hints)."""
+    slugs = [s.strip() for s in (industries or "").split(",") if s.strip()]
+    custom = [k.strip() for k in (keywords or "").split(",") if k.strip()]
+    # Industry tags first (curated), then any custom keywords, de-duplicated.
+    tags, seen = [], set()
+    for t in industry_tags(slugs) + custom:
+        tl = t.lower()
+        if tl not in seen:
+            seen.add(tl)
+            tags.append(t)
+    # Nothing chosen at all -> the broad-tech default ICP bias (what the UI
+    # promises). An explicit pick (industries and/or custom keywords) replaces
+    # it so "Fintech" means fintech, not fintech + everything.
+    kw = tags or list(DEFAULT_KEYWORDS)
+    loc = [l.strip() for l in (locations or "").split(",") if l.strip()] or None
     sizes = SIZE_PRESETS.get(size_range) or SIZE_PRESETS["startup"]
-    return kw, loc, sizes
+    hints = industry_hints(slugs) or None
+    return kw, loc, sizes, hints
 
 
 @app.post("/leads/apollo_preview", response_class=HTMLResponse)
 def apollo_preview(request: Request, brands: int = Form(20),
-                   per_brand: int = Form(5), keywords: str = Form(""),
+                   per_brand: int = Form(5), industries: str = Form(""),
+                   keywords: str = Form(""),
                    locations: str = Form(""), size_range: str = Form("startup")):
     """Free search-only preview: show who Apollo has, grouped by brand, before
     spending any credits."""
@@ -462,12 +486,13 @@ def apollo_preview(request: Request, brands: int = Form(20),
     try:
         brands = max(1, min(100, brands))
         per_brand = max(1, min(10, per_brand))
-        kw, loc, sizes = _apollo_filters(keywords, locations, size_range)
+        kw, loc, sizes, _hints = _apollo_filters(industries, keywords,
+                                                 locations, size_range)
         preview = preview_apollo(keywords=kw, locations=loc, size_ranges=sizes,
                                  brands=brands, per_brand=per_brand)
-        pf = {"keywords": keywords, "locations": locations,
-              "size_range": size_range, "brands": brands,
-              "per_brand": per_brand}
+        pf = {"industries": industries, "keywords": keywords,
+              "locations": locations, "size_range": size_range,
+              "brands": brands, "per_brand": per_brand}
         return templates.TemplateResponse(request, "leads.html", _leads_ctx(
             request, db, preview=preview, preview_filters=pf))
     finally:
@@ -490,24 +515,27 @@ async def leads_import(request: Request, file: UploadFile = File(...),
 
 @app.post("/leads/apollo_pull")
 def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
-                keywords: str = Form(""), locations: str = Form(""),
-                size_range: str = Form("startup")):
+                industries: str = Form(""), keywords: str = Form(""),
+                locations: str = Form(""), size_range: str = Form("startup")):
     """Pull the top `per_brand` execs at up to `brands` companies from Apollo
     (default ICP). Enforces the per-brand cap + brand scope, and runs the same
-    verify/dedupe/suppression gates."""
+    verify/dedupe/suppression gates plus the ICP + genuine-location gates."""
     db = SessionLocal()
     try:
         brands = max(1, min(100, brands))
         per_brand = max(1, min(10, per_brand))
-        kw, loc, sizes = _apollo_filters(keywords, locations, size_range)
+        kw, loc, sizes, hints = _apollo_filters(industries, keywords,
+                                                locations, size_range)
         s = pull_apollo(db, keywords=kw, locations=loc, size_ranges=sizes,
-                        brands=brands, per_brand=per_brand)
+                        brands=brands, per_brand=per_brand, target_hints=hints)
+        loc_skips = s["skipped_location"] + s["skipped_location_prereveal"]
         return RedirectResponse(
             f"/leads?pulled=1&brands={s['brands']}&per_brand={s['per_brand']}"
             f"&brands_filled={s['brands_filled']}&fetched={s['fetched']}"
             f"&imported={s['imported']}&brand_full={s['skipped_brand_full']}"
             f"&dupe={s['skipped_duplicate']}&no_email={s['no_email']}"
             f"&icp={s['skipped_icp'] + s['skipped_prescreen']}"
+            f"&loc={loc_skips}"
             f"&exhausted={1 if s['exhausted'] else 0}",
             status_code=303)
     finally:

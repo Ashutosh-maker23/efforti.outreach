@@ -13,7 +13,10 @@ services. Built for ~300–1,300 emails/week across a handful of Gmail mailboxes
   headcount, funding & startup signals). Off-ICP companies (restaurants,
   schools, public companies, free-mail "execs"…) are rejected before import;
   imported leads carry the score + reasons and the Leads page ranks best fit
-  first. Bar is `ICP_MIN_SCORE` (default 55).
+  first. Bar is `ICP_MIN_SCORE` (default 55). Pick target verticals from a
+  multi-select **Industry focus** dropdown (biases the search *and* the score),
+  and set **HQ locations** for a genuine headquarters check that drops the
+  overseas brands Apollo's search otherwise leaks.
 - **Sequences** — 3-touch by default (Day 0 / +3 / +5). Follow-ups thread as
   "Re:" replies via In-Reply-To headers. Jinja2 personalization:
   `{{first_name}}`, `{{company}}`, `{{title}}`, `{{trigger}}`.
