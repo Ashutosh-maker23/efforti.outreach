@@ -396,7 +396,6 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
                    Lead.status.in_(["verified", "enrolled"]),
                    Lead.company_research != "",
                    Lead.company_research.isnot(None)).count(),
-               apollo_default_keywords=", ".join(DEFAULT_KEYWORDS),
                industry_options=INDUSTRY_OPTIONS,
                company_traits=COMPANY_TRAITS,
                **extra)
@@ -449,23 +448,20 @@ def leads_page(request: Request, status: str = "", due: int = -1,
         db.close()
 
 
-def _apollo_filters(industries, traits, keywords, locations, size_range):
+def _apollo_filters(industries, traits, locations, size_range):
     """Shared parsing for the Apollo form fields.
 
     `industries` (vertical) and `traits` (who-they-sell-to / how-they-operate)
     are comma-joined slug lists from the two multi-select dropdowns. Each slug
     maps to Apollo keyword tags (bias the free search) and to ICP scorer hints
-    (count a matching revealed vertical as on-target). Any free-text in
-    `keywords` is merged on top. Selecting nothing anywhere falls back to the
-    broad-tech DEFAULT_KEYWORDS (handled downstream). Returns
-    (keyword_tags, locations, size_ranges, target_hints)."""
+    (count a matching revealed vertical as on-target). Selecting nothing
+    anywhere falls back to the broad-tech DEFAULT_KEYWORDS (handled downstream).
+    Returns (keyword_tags, locations, size_ranges, target_hints)."""
     ind = [s.strip() for s in (industries or "").split(",") if s.strip()]
     trt = [s.strip() for s in (traits or "").split(",") if s.strip()]
-    custom = [k.strip() for k in (keywords or "").split(",") if k.strip()]
-    # Curated tags first (industry, then trait), then any custom keywords,
-    # de-duplicated case-insensitively.
+    # Curated tags: industry first, then trait, de-duplicated case-insensitively.
     tags, seen = [], set()
-    for t in industry_tags(ind) + trait_tags(trt) + custom:
+    for t in industry_tags(ind) + trait_tags(trt):
         tl = t.lower()
         if tl not in seen:
             seen.add(tl)
@@ -488,7 +484,7 @@ def _apollo_filters(industries, traits, keywords, locations, size_range):
 @app.post("/leads/apollo_preview", response_class=HTMLResponse)
 def apollo_preview(request: Request, brands: int = Form(20),
                    per_brand: int = Form(5), industries: str = Form(""),
-                   traits: str = Form(""), keywords: str = Form(""),
+                   traits: str = Form(""),
                    locations: str = Form(""), size_range: str = Form("startup"),
                    remote_first: str = Form("")):
     """Free search-only preview: show who Apollo has, grouped by brand, before
@@ -499,11 +495,11 @@ def apollo_preview(request: Request, brands: int = Form(20),
     try:
         brands = max(1, min(100, brands))
         per_brand = max(1, min(10, per_brand))
-        kw, loc, sizes, _hints = _apollo_filters(industries, traits, keywords,
+        kw, loc, sizes, _hints = _apollo_filters(industries, traits,
                                                  locations, size_range)
         preview = preview_apollo(keywords=kw, locations=loc, size_ranges=sizes,
                                  brands=brands, per_brand=per_brand)
-        pf = {"industries": industries, "traits": traits, "keywords": keywords,
+        pf = {"industries": industries, "traits": traits,
               "locations": locations, "size_range": size_range,
               "brands": brands, "per_brand": per_brand,
               "remote_first": (remote_first == "on")}
@@ -530,7 +526,6 @@ async def leads_import(request: Request, file: UploadFile = File(...),
 @app.post("/leads/apollo_pull")
 def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
                 industries: str = Form(""), traits: str = Form(""),
-                keywords: str = Form(""),
                 locations: str = Form(""), size_range: str = Form("startup"),
                 remote_first: str = Form("")):
     """Pull the top `per_brand` execs at up to `brands` companies from Apollo
@@ -541,7 +536,7 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
     try:
         brands = max(1, min(100, brands))
         per_brand = max(1, min(10, per_brand))
-        kw, loc, sizes, hints = _apollo_filters(industries, traits, keywords,
+        kw, loc, sizes, hints = _apollo_filters(industries, traits,
                                                 locations, size_range)
         s = pull_apollo(db, keywords=kw, locations=loc, size_ranges=sizes,
                         brands=brands, per_brand=per_brand, target_hints=hints,

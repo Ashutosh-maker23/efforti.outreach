@@ -135,8 +135,6 @@
         </div>
         <input type="hidden" name="traits" id="traitHidden" value="{{ preview_filters.traits if preview_filters is defined else '' }}">
       </div>
-      <label style="margin-top:12px">More keywords <span class="muted">(optional — only if a term isn't covered above; comma-separated)</span></label>
-      <input type="text" name="keywords" value="{{ preview_filters.keywords if preview_filters is defined else '' }}" placeholder="e.g. logistics, creator economy">
       <label style="margin-top:12px">Company HQ locations <span class="muted">(optional — filters by the company's real headquarters)</span></label>
       <input type="text" name="locations" value="{{ preview_filters.locations if preview_filters is defined else '' }}" placeholder="India, United States">
       <label style="display:flex;align-items:center;gap:9px;font-weight:600;margin-top:14px;cursor:pointer">
@@ -237,7 +235,6 @@
     <form method="post" action="/leads/apollo_pull" style="margin-left:auto">
       <input type="hidden" name="industries" value="{{preview_filters.industries}}">
       <input type="hidden" name="traits" value="{{preview_filters.traits}}">
-      <input type="hidden" name="keywords" value="{{preview_filters.keywords}}">
       <input type="hidden" name="locations" value="{{preview_filters.locations}}">
       <input type="hidden" name="size_range" value="{{preview_filters.size_range}}">
       <input type="hidden" name="brands" value="{{preview_filters.brands}}">
