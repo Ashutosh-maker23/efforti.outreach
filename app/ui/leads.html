@@ -53,7 +53,7 @@
 <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
   <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
   <span><strong style="color:var(--ok)">Imported {{pull_result.imported}} execs across {{pull_result.brands_filled}} brand{{'' if pull_result.brands_filled==1 else 's'}}.</strong>
-  Target was {{pull_result.per_brand}} per brand × {{pull_result.brands}} brands ({{pull_result.target_total}} max). Scanned {{pull_result.fetched}} contacts · {{pull_result.brand_full}} skipped (brand already full) · {{pull_result.dupe}} duplicate · {{pull_result.no_email}} without an email.
+  Target was {{pull_result.per_brand}} per brand × {{pull_result.brands}} brands ({{pull_result.target_total}} max). Scanned {{pull_result.fetched}} contacts · {{pull_result.icp}} skipped as off-ICP (wrong industry/size/startup fit — details in <a href="/activity">Activity</a>) · {{pull_result.brand_full}} skipped (brand already full) · {{pull_result.dupe}} duplicate · {{pull_result.no_email}} without an email.
   {% if pull_result.exhausted and pull_result.imported < pull_result.target_total %}<br><strong>Pool exhausted for these filters</strong> — broaden the keywords/locations or headcount range to reach more brands.{% endif %}</span>
 </div>
 {% endif %}
@@ -107,13 +107,13 @@
         <option value="midmarket">Mid-market (1,000–5,000)</option>
         <option value="any">Any size</option>
       </select>
-      <label style="margin-top:12px">Industry / keywords <span class="muted">(comma-separated, optional)</span></label>
-      <input type="text" name="keywords" placeholder="saas, fintech, remote-first">
-      <label>Locations <span class="muted">(optional)</span></label>
-      <input type="text" name="locations" placeholder="India, United States">
+      <label style="margin-top:12px">Industry / keywords <span class="muted">(comma-separated — pre-filled with the default ICP; clear for any industry)</span></label>
+      <input type="text" name="keywords" value="{{ preview_filters.keywords if preview_filters is defined else apollo_default_keywords }}" placeholder="saas, fintech, remote-first">
+      <label>Company HQ locations <span class="muted">(optional)</span></label>
+      <input type="text" name="locations" value="{{ preview_filters.locations if preview_filters is defined else '' }}" placeholder="India, United States">
       <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-top:14px">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-        <span>Targets the <strong>top 5 decision-makers</strong> per brand: CEO/Founder · COO · Chief of Staff · CFO · CPO. Scope this pull: <strong id="apScope">up to 100 execs</strong>. <strong>Preview is free</strong> — reveal on import costs ~1 credit each.</span>
+        <span>Targets the <strong>top 5 decision-makers</strong> per brand: CEO/Founder · COO · Chief of Staff · CFO · CPO — <strong>verified emails only</strong>, exact titles. Every revealed contact is <strong>ICP-checked</strong> (industry, real headcount, funding &amp; startup signals) and off-ICP companies are skipped before import. Scope this pull: <strong id="apScope">up to 100 execs</strong>. <strong>Preview is free</strong> — reveal on import costs ~1 credit each.</span>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px">
         <button class="btn ghost" formaction="/leads/apollo_preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Preview</button>
@@ -227,6 +227,11 @@ td .btn.sm{white-space:nowrap}
 .lcb{width:16px;height:16px;cursor:pointer;accent-color:var(--accent);margin:0;flex-shrink:0;vertical-align:middle}
 .contact-em{font-weight:600}
 .contact-sub{font-size:12px;color:var(--text-3)}
+.icpb{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:99px;
+  margin-left:6px;letter-spacing:.02em;cursor:help;white-space:nowrap}
+.icpb.hi{background:var(--ok-soft);color:var(--ok)}
+.icpb.mid{background:var(--warn-soft);color:var(--warn)}
+.icpb.lo{background:var(--bad-soft);color:var(--bad)}
 .dontmail{color:var(--text-3);font-size:12px;cursor:pointer;background:none;border:0;padding:4px}
 .dontmail:hover{color:var(--bad)}
 .pager{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;font-size:12.5px}
@@ -238,7 +243,7 @@ td .btn.sm{white-space:nowrap}
 </style>
 
 <h2 style="margin-bottom:2px">Your leads — pick who to email</h2>
-<p class="muted" style="font-size:12.5px;margin-bottom:10px">Send the first email or the next follow-up to one person, or tick several and send the same email to all of them at once. Already-sent emails show a ✓ and can't be sent twice.</p>
+<p class="muted" style="font-size:12.5px;margin-bottom:10px">Sorted by <strong style="color:var(--text-2)">ICP fit, best first</strong> — hover a score badge to see why a company scored the way it did. Send the first email or the next follow-up to one person, or tick several and send the same email to all of them at once. Already-sent emails show a ✓ and can't be sent twice.</p>
 
 {% set actives = mailboxes_all | selectattr('active') | list %}
 <div class="sendfrom">
@@ -347,7 +352,8 @@ td .btn.sm{white-space:nowrap}
       <input type="checkbox" class="lcb rowcb" value="{{l.id}}" data-step="{{pr.next}}">{% endif %}</td>
     <td><div class="contact-em">{{l.email}}</div>
       <div class="contact-sub">{{l.first_name}} {{l.last_name}}{% if l.title %} · {{l.title}}{% endif %}</div></td>
-    <td>{{l.company}} <span class="muted">{{l.company_size}}</span></td>
+    <td>{{l.company}} <span class="muted">{{l.company_size}}</span>
+      {% if l.icp_score is not none and l.icp_score >= 0 %}<span class="icpb {{'hi' if l.icp_score >= 70 else ('mid' if l.icp_score >= 55 else 'lo')}}" title="{{l.icp_reasons}}">ICP {{l.icp_score}}</span>{% endif %}</td>
     <td class="muted" style="max-width:300px;font-size:12.5px">{{ (l.intro or l.trigger)|truncate(120) }}</td>
     <td>
       {% if pr.state == 'ready' %}

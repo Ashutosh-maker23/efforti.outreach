@@ -23,7 +23,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_
 
 from .analytics import compute as compute_analytics
-from .apollo import SIZE_PRESETS, preview_apollo, pull_apollo
+from .apollo import (DEFAULT_KEYWORDS, SIZE_PRESETS, preview_apollo,
+                     pull_apollo)
 from .emailer import signature_preview_html, verify_credentials
 from .enrich import enrich_leads
 from .importer import import_csv
@@ -373,7 +374,9 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
     total_count = view.count()
     total_pages = max(1, (total_count + per_page - 1) // per_page)
     page = max(1, min(page, total_pages))
-    leads = (view.order_by(Lead.id.desc())
+    # Best ICP fits first (unscored CSV leads sink below scored ones), so
+    # "Select top N" + limited daily caps spend sends on the likeliest repliers.
+    leads = (view.order_by(Lead.icp_score.desc(), Lead.id.desc())
              .offset((page - 1) * per_page).limit(per_page).all())
     page_start = (page - 1) * per_page + 1 if leads else 0
     page_end = (page - 1) * per_page + len(leads)
@@ -391,6 +394,7 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
                    Lead.status.in_(["verified", "enrolled"]),
                    Lead.company_research != "",
                    Lead.company_research.isnot(None)).count(),
+               apollo_default_keywords=", ".join(DEFAULT_KEYWORDS),
                **extra)
 
 
@@ -399,7 +403,8 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                page: int = 1, per_page: int = 100, pulled: int = 0,
                brands: int = 0, per_brand: int = 0, brands_filled: int = 0,
                fetched: int = 0, imported: int = 0, brand_full: int = 0,
-               dupe: int = 0, no_email: int = 0, exhausted: int = 0,
+               dupe: int = 0, no_email: int = 0, icp: int = 0,
+               exhausted: int = 0,
                one: str = "", bulk: int = 0, bsent: int = 0,
                bskip: int = 0, bnomb: int = 0, bstep: int = -1,
                enr: int = 0, provider: str = "", ai: int = 0, fb: int = 0,
@@ -420,7 +425,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
             pull_result = {"brands": brands, "per_brand": per_brand,
                            "brands_filled": brands_filled, "fetched": fetched,
                            "imported": imported, "brand_full": brand_full,
-                           "dupe": dupe, "no_email": no_email,
+                           "dupe": dupe, "no_email": no_email, "icp": icp,
                            "target_total": brands * per_brand,
                            "exhausted": bool(exhausted)}
         send_feedback = None
@@ -502,6 +507,7 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
             f"&brands_filled={s['brands_filled']}&fetched={s['fetched']}"
             f"&imported={s['imported']}&brand_full={s['skipped_brand_full']}"
             f"&dupe={s['skipped_duplicate']}&no_email={s['no_email']}"
+            f"&icp={s['skipped_icp'] + s['skipped_prescreen']}"
             f"&exhausted={1 if s['exhausted'] else 0}",
             status_code=303)
     finally:

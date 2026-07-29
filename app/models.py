@@ -84,6 +84,8 @@ class Lead(Base):
     trigger = Column(String, default="")           # e.g. "raised seed Mar 2026"
     industry = Column(String, default="")          # from Apollo, feeds personalization
     company_desc = Column(Text, default="")        # short blurb, feeds AI opener
+    icp_score = Column(Integer, default=-1)        # 0–100 fit vs ICP; -1 = unscored (CSV)
+    icp_reasons = Column(Text, default="")         # human-readable scoring breakdown
     company_research = Column(Text, default="")    # live web research, per company, feeds the intro
     researched_at = Column(DateTime)               # when company_research was last refreshed
     intro = Column(Text, default="")               # AI-written 2-paragraph brand intro for the PRIMARY email
@@ -239,6 +241,8 @@ def _migrate_sqlite():
             "company_research": "TEXT DEFAULT ''",
             "researched_at": "DATETIME",
             "intro": "TEXT DEFAULT ''",
+            "icp_score": "INTEGER DEFAULT -1",
+            "icp_reasons": "TEXT DEFAULT ''",
         },
     }
     with engine.begin() as conn:

@@ -20,6 +20,7 @@ import time
 
 import requests
 
+from .icp import parse_band, prescreen_org, score_lead
 from .importer import normalize_domain, verify_email
 from .models import Lead, Suppression, log
 
@@ -50,6 +51,14 @@ DEFAULT_TITLES = [
 # "manager" who happens to have one of the title words.
 DEFAULT_SENIORITIES = ["owner", "founder", "c_suite"]
 DEFAULT_SIZE_RANGES = ["21,50", "51,100", "101,200"]
+
+# Default ICP org-keyword tags — biases the FREE search toward tech/product
+# companies (the "startup" half of the ICP that Apollo's filters can't express
+# directly). Pre-filled in the UI field; clearing the field searches without a
+# keyword bias and lets the post-reveal ICP gate do all the work.
+DEFAULT_KEYWORDS = ["software", "saas", "information technology",
+                    "artificial intelligence", "fintech", "cloud",
+                    "internet", "b2b"]
 
 # Named headcount presets for the UI dropdown -> Apollo range strings.
 SIZE_PRESETS = {
@@ -83,15 +92,24 @@ def _search_page(titles, size_ranges, keywords, locations, page, per_page,
                  seniorities=None):
     body = {
         "person_titles": titles,
+        # Apollo expands titles to "similar" ones by default, which quietly
+        # widens the pull beyond the curated decision-maker list — turn it off;
+        # DEFAULT_TITLES already enumerates the variants we want.
+        "include_similar_titles": False,
         "person_seniorities": seniorities or DEFAULT_SENIORITIES,
         "organization_num_employees_ranges": size_ranges,
+        # Verified-address contacts only: reveals aren't wasted on emails that
+        # would bounce, and bounces are what wreck sender reputation.
+        "contact_email_status": ["verified", "likely to engage"],
         "page": page,
         "per_page": per_page,
     }
     if keywords:
         body["q_organization_keyword_tags"] = keywords
     if locations:
-        body["person_locations"] = locations
+        # Company HQ location, not the exec's personal one — the ICP is about
+        # where the BUSINESS is.
+        body["organization_locations"] = locations
     r = requests.post(SEARCH_URL, headers=_headers(), json=body, timeout=30)
     r.raise_for_status()
     return r.json()
@@ -197,6 +215,8 @@ def preview_apollo(titles=None, size_ranges=None, keywords=None, locations=None,
                 break
             for p in people:
                 org = p.get("organization") or {}
+                if not prescreen_org(org)[0]:
+                    continue    # unambiguous non-fit — a pull would skip it too
                 # api_search hides the domain and often the org name; fall back
                 # to the person id so a real contact is never silently dropped
                 # from the count (the credit estimate must reflect every reveal).
@@ -233,7 +253,10 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     """Import up to `per_brand` top execs at up to `brands` companies
     (default 5 execs × 20 brands = 100 targets), running every revealed
     contact through the same verify/dedupe/suppression/one-per-domain gates as
-    the CSV importer.
+    the CSV importer PLUS the ICP gate (icp.score_lead): revealed companies
+    that aren't a real fit — wrong industry, headcount out of band, public,
+    free-mail, stale title, weak startup signals — are skipped, and every
+    imported lead carries an icp_score/icp_reasons explaining its fit.
 
     Bounded by design. Apollo's search hides the company domain, so a reveal
     (1 credit) is the only way to learn who a contact really is — we can't skip
@@ -254,13 +277,15 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
              "reveals": 0, "reveal_budget": max_reveals,
              "skipped_suppressed": 0, "skipped_duplicate": 0,
              "skipped_brand_full": 0, "skipped_scope": 0,
-             "skipped_invalid": 0, "exhausted": False}
+             "skipped_invalid": 0, "skipped_icp": 0, "skipped_prescreen": 0,
+             "icp_reject_reasons": {}, "exhausted": False}
     if not os.environ.get("APOLLO_API_KEY"):
         log(db, "error", "apollo pull skipped: APOLLO_API_KEY not set")
         return stats
 
     titles = titles or DEFAULT_TITLES
     size_ranges = size_ranges or DEFAULT_SIZE_RANGES
+    band = parse_band(size_ranges)
 
     suppressed = {s.email for s in db.query(Suppression).all()}
     existing_emails = {l.email for l in db.query(Lead.email).all()}
@@ -299,6 +324,16 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         if verify_email(email, do_mx=False) != "ok":
             stats["skipped_invalid"] += 1
             return False
+        # ICP extraction: judge the REVEALED company/person against the ICP
+        # (industry, real headcount, startup signals, live title) — this is
+        # what keeps a 50-person restaurant group with a "CEO" out of the DB.
+        icp = score_lead(f, enriched.get("organization") or {}, band)
+        if icp["verdict"] != "pass":
+            stats["skipped_icp"] += 1
+            why = (icp["reasons"][0] if icp["reasons"] else "?").split(":")[0]
+            tally = stats["icp_reject_reasons"]
+            tally[why] = tally.get(why, 0) + 1
+            return False
         domain = normalize_domain(f["company_domain"]) or email.split("@", 1)[1]
         if not _room(domain):
             held = domain_counts.get(domain, 0) + brand_domains.get(domain, 0)
@@ -311,7 +346,9 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             email=email, first_name=f["first_name"], last_name=f["last_name"],
             title=f["title"], company=f["company"], company_domain=domain,
             company_size=f["company_size"], industry=f["industry"],
-            company_desc=f["company_desc"], trigger=f.get("trigger", ""),
+            company_desc=f["company_desc"],
+            trigger=icp["trigger"] or f.get("trigger", ""),
+            icp_score=icp["score"], icp_reasons="; ".join(icp["reasons"]),
             source="apollo", status="verified", verify_result="ok",
         ))
         existing_emails.add(email)
@@ -332,9 +369,18 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                 stats["exhausted"] = True          # ran out of matching contacts
                 break
             stats["fetched"] += len(people)
-            # Only has_email contacts are worth a reveal; the rest are dead ends.
-            candidates = [p.get("id") for p in people
-                          if p.get("has_email") and p.get("id")]
+            # Only has_email contacts are worth a reveal; the rest are dead
+            # ends. Free pre-screen first: when the obfuscated preview already
+            # proves a company off-ICP (blocked industry / stock ticker), skip
+            # it BEFORE spending the reveal credit.
+            candidates = []
+            for p in people:
+                if not (p.get("has_email") and p.get("id")):
+                    continue
+                if not prescreen_org(p.get("organization") or {})[0]:
+                    stats["skipped_prescreen"] += 1
+                    continue
+                candidates.append(p.get("id"))
             stats["no_email"] += sum(1 for p in people if not p.get("has_email"))
             imported_before_page = stats["imported"]
 
@@ -374,11 +420,17 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         log(db, "error", f"apollo pull failed: {e}")
 
     stats["brands_filled"] = len(brand_domains)
+    off_icp = stats["skipped_icp"] + stats["skipped_prescreen"]
+    top_reasons = ", ".join(
+        f"{why} ×{n}" for why, n in sorted(stats["icp_reject_reasons"].items(),
+                                           key=lambda kv: -kv[1])[:3])
     log(db, "import",
         f"Apollo pull: imported {stats['imported']} execs across "
         f"{stats['brands_filled']} brands (target {per_brand}×{brands}"
         f"={target_total}) · {stats['reveals']} reveals · "
         f"{stats['fetched']} scanned · "
+        f"{off_icp} off-ICP ({stats['skipped_prescreen']} pre-reveal"
+        + (f"; top: {top_reasons}" if top_reasons else "") + ") · "
         f"{stats['skipped_brand_full']} brand-full · "
         f"{stats['skipped_duplicate']} duplicate · "
         f"{stats['no_email']} without email"

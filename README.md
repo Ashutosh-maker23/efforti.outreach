@@ -8,6 +8,12 @@ services. Built for ~300–1,300 emails/week across a handful of Gmail mailboxes
 
 - **Import** Apollo CSV exports. Filters bad syntax, dead domains (MX check),
   suppressed emails, duplicates, and enforces one lead per company domain.
+- **ICP-gated Apollo pulls** — searches verified-email execs with exact titles,
+  then scores every revealed company 0–100 against the ICP (industry, real
+  headcount, funding & startup signals). Off-ICP companies (restaurants,
+  schools, public companies, free-mail "execs"…) are rejected before import;
+  imported leads carry the score + reasons and the Leads page ranks best fit
+  first. Bar is `ICP_MIN_SCORE` (default 55).
 - **Sequences** — 3-touch by default (Day 0 / +3 / +5). Follow-ups thread as
   "Re:" replies via In-Reply-To headers. Jinja2 personalization:
   `{{first_name}}`, `{{company}}`, `{{title}}`, `{{trigger}}`.
@@ -86,6 +92,7 @@ app/
   models.py     SQLAlchemy: Mailbox, Lead, Sequence, Enrollment, Message,
                 Suppression, Event
   importer.py   CSV import + syntax/MX verification + dedupe
+  icp.py        ICP extraction: score/gate revealed Apollo companies vs the ICP
   emailer.py    SMTP send, threading headers, unsubscribe footer
   scheduler.py  APScheduler jobs: due sends (5 min), IMAP poll (10 min),
                 counter decay (daily)
