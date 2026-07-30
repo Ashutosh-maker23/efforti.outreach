@@ -231,12 +231,16 @@ def _primary_enrollment(db, lead_id):
             .first())
 
 
-def _lead_progress(db, leads):
+def _lead_progress(db, leads, now=None):
     """Per-lead outreach state for the action column: which steps already went
-    out, which step is next to send, and whether the lead has stopped/finished.
+    out, which step is next to send, whether the lead has stopped/finished, and
+    — for a follow-up — whether its day-gap has elapsed yet (is_due/due_at).
+    A follow-up whose gap hasn't passed gets state 'scheduled' (locked in the
+    UI) so it can't be sent early or swept into a bulk send.
     Returns (progress_by_lead_id, total_steps)."""
     if not leads:
         return {}, 0
+    now = now or utcnow()
     seq = db.query(Sequence).filter(Sequence.active.is_(True)).first()
     total = len(seq.steps) if seq and seq.steps else 3
     ids = [l.id for l in leads]
@@ -262,6 +266,7 @@ def _lead_progress(db, leads):
     prog = {}
     for l in leads:
         done_steps = sorted(sent.get(l.email, set()))
+        due_at, is_due = None, True
         if l.status in ("replied", "bounced", "unsubscribed"):
             state, nxt = l.status, None
         else:
@@ -270,9 +275,17 @@ def _lead_progress(db, leads):
             if cur >= total:
                 state, nxt = "done", None
             else:
-                state, nxt = "ready", cur
+                nxt = cur
+                # First email (step 0) is always sendable. A follow-up is due
+                # only once its wait_days have elapsed — next_send_at is that
+                # moment. A missing next_send_at (legacy row) is treated as due.
+                if cur >= 1 and enr is not None:
+                    due_at = enr.next_send_at
+                    is_due = due_at is None or due_at <= now
+                state = "ready" if is_due else "scheduled"
         prog[l.id] = {
             "sent": done_steps, "next": nxt, "state": state,
+            "due_at": due_at, "is_due": is_due,
             "action": None if nxt is None else
             ("Send first email" if nxt == 0 else f"Send follow-up {nxt}"),
         }
@@ -319,8 +332,13 @@ def _ensure_enrollment(db, lead, mailbox):
     return enr
 
 
-def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
-    """Shared context for the Leads page (used by the page and the preview)."""
+def _leads_ctx(request, db, status="", due=-1, timing="due", page=1,
+               per_page=100, **extra):
+    """Shared context for the Leads page (used by the page and the preview).
+    `timing` gates follow-ups by their day-gap: 'due' (default) hides follow-ups
+    whose gap hasn't elapsed, 'upcoming' shows ONLY those scheduled ones, 'all'
+    shows everything."""
+    now = utcnow()
     mb = active_mailbox(request, db)
     # Build the filter once so the pager, the step counts and the table all
     # describe the same set. `base` is unordered (used for counts/aggregates);
@@ -344,16 +362,49 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
     # step needs only its status + furthest active-enrollment step (sent messages
     # don't change it); active enrollments are few, so this stays cheap.
     STOPPED = ("replied", "bounced", "unsubscribed")
-    enr_step = dict(db.query(Enrollment.lead_id, func.max(Enrollment.current_step))
-                    .filter(Enrollment.status == "active")
-                    .group_by(Enrollment.lead_id).all())
+    # Furthest active enrollment per lead — its step AND its next_send_at (when
+    # the next step becomes sendable). Active enrollments are few, so picking the
+    # primary (max step, ties -> max id) in Python stays cheap.
+    enr_step, enr_due = {}, {}
+    _primary = {}                                # lead_id -> (step, id)
+    for lid, cstep, nsa, eid in db.query(
+            Enrollment.lead_id, Enrollment.current_step,
+            Enrollment.next_send_at, Enrollment.id).filter(
+            Enrollment.status == "active").all():
+        prev = _primary.get(lid)
+        if prev is None or cstep > prev[0] or (cstep == prev[0] and eid > prev[1]):
+            _primary[lid] = (cstep, eid)
+            enr_step[lid] = cstep
+            enr_due[lid] = nsa
+
+    def _due_now(lid):
+        """A lead's NEXT step is sendable now: first email always is; a follow-up
+        only once its next_send_at has passed (missing = legacy = treat as due)."""
+        step = enr_step.get(lid, 0)
+        if step == 0:
+            return True
+        nsa = enr_due.get(lid)
+        return nsa is None or nsa <= now
+
+    # Scheduled = a mid-sequence follow-up whose gap hasn't elapsed yet.
+    scheduled_ids = {lid for lid, s in enr_step.items()
+                     if 1 <= s < n_steps and not _due_now(lid)}
+
+    # Step counts reflect what's actually SENDABLE now (day-gap elapsed), so the
+    # "Ready to send" numbers never over-promise; scheduled ones are tallied
+    # separately for the Due filter.
     due_counts = {}
+    scheduled_count = 0
     for lid, lstatus in base.with_entities(Lead.id, Lead.status).all():
         if lstatus in STOPPED:
             continue
         step = enr_step.get(lid, 0)
-        if step < n_steps:                       # not yet finished the sequence
+        if step >= n_steps:                      # finished the sequence
+            continue
+        if _due_now(lid):
             due_counts[step] = due_counts.get(step, 0) + 1
+        else:
+            scheduled_count += 1
 
     # When a step filter is active, narrow at the DB level so pagination walks
     # every match across all pages — not just whatever landed on this page.
@@ -369,6 +420,15 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
         view = base.filter(Lead.id.in_(ready_ids or [-1]),
                            Lead.status.notin_(STOPPED))
 
+    # Timing filter (day-gap gate). Default 'due' hides not-yet-due follow-ups
+    # so a bulk "select all shown" can never fire a premature follow-up.
+    if timing == "due":
+        if scheduled_ids:
+            view = view.filter(~Lead.id.in_(scheduled_ids))
+    elif timing == "upcoming":
+        view = view.filter(Lead.id.in_(scheduled_ids or {-1}),
+                           Lead.status.notin_(STOPPED))
+
     # Page through the (optionally filtered) list instead of capping at 500.
     # per_page is clamped and page is snapped into range, so a stale/oob ?page=
     # never lands on a blank table.
@@ -382,12 +442,13 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
              .offset((page - 1) * per_page).limit(per_page).all())
     page_start = (page - 1) * per_page + 1 if leads else 0
     page_end = (page - 1) * per_page + len(leads)
-    prog, _ = _lead_progress(db, leads)
+    prog, _ = _lead_progress(db, leads, now=now)
 
     return ctx(request, db, active_mb=mb, leads=leads,
                progress=prog, total_steps=n_steps,
                step_labels=[_step_label(i, short=True) for i in range(n_steps)],
                due_counts=due_counts, due_filter=due,
+               timing_filter=timing, scheduled_count=scheduled_count,
                status_filter=status,
                page=page, per_page=per_page, total_pages=total_pages,
                total_count=total_count, page_start=page_start, page_end=page_end,
@@ -403,6 +464,7 @@ def _leads_ctx(request, db, status="", due=-1, page=1, per_page=100, **extra):
 
 @app.get("/leads", response_class=HTMLResponse)
 def leads_page(request: Request, status: str = "", due: int = -1,
+               timing: str = "due",
                page: int = 1, per_page: int = 100, pulled: int = 0,
                brands: int = 0, per_brand: int = 0, brands_filled: int = 0,
                fetched: int = 0, imported: int = 0, brand_full: int = 0,
@@ -439,9 +501,10 @@ def leads_page(request: Request, status: str = "", due: int = -1,
             send_feedback = {"kind": "bulk", "sent": bsent,
                              "skipped": bskip, "no_mailbox": bnomb,
                              "label": _step_label(bstep) if bstep >= 0 else ""}
+        timing = timing if timing in ("due", "upcoming", "all") else "due"
         return templates.TemplateResponse(request, "leads.html", _leads_ctx(
-            request, db, status=status, due=due, page=page, per_page=per_page,
-            pull_result=pull_result,
+            request, db, status=status, due=due, timing=timing, page=page,
+            per_page=per_page, pull_result=pull_result,
             send_feedback=send_feedback, enrich_result=enrich_result,
             research_result=research_result))
     finally:

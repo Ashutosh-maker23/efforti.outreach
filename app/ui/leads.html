@@ -70,6 +70,7 @@
       {% elif f.status == 'no_sequence' %}There's no active email sequence to send.
       {% elif f.status == 'stopped' %}This person already replied, bounced, or opted out — sending is stopped for them.
       {% elif f.status == 'out_of_order' %}Send the earlier email first — you can't skip ahead.
+      {% elif f.status == 'too_early' %}Not due yet — this follow-up's day-gap hasn't elapsed. It'll unlock on its scheduled date.
       {% elif f.status == 'done' %}This lead has already received every email in the sequence.
       {% else %}Send failed — check the <a href="/activity">Activity</a> log for the reason.
       {% endif %}
@@ -293,6 +294,7 @@
 .stp{font-size:11px;font-weight:600;padding:3px 8px;border-radius:99px;white-space:nowrap;letter-spacing:.01em}
 .stp.done{background:var(--ok-soft);color:var(--ok)}
 .stp.lock{background:var(--surface-3);color:var(--text-3)}
+.stp.sched{background:var(--warn-soft);color:var(--warn)}
 td .btn.sm{white-space:nowrap}
 .lcb{width:16px;height:16px;cursor:pointer;accent-color:var(--accent);margin:0;flex-shrink:0;vertical-align:middle}
 .contact-em{font-weight:600}
@@ -370,26 +372,39 @@ td .btn.sm{white-space:nowrap}
   <button type="button" class="btn ghost sm" id="topBtn">Select</button>
   <a href="#" id="clearSel" class="muted" style="display:none">clear selection</a>
 
-  <!-- Filters as compact dropdowns, right-aligned (replaces the two chip rows). Live counts kept. -->
+  <!-- Filters compose: setParam updates ONE query param and keeps the others. -->
   <div class="leadfilters">
+    <div class="ff"><span>Due</span>
+      <select onchange="setParam('timing', this.value)" aria-label="Filter by follow-up timing">
+        <option value="due" {{ 'selected' if timing_filter == 'due' }}>Due now · {{ due_counts.values()|sum }}</option>
+        <option value="upcoming" {{ 'selected' if timing_filter == 'upcoming' }}>Scheduled · {{ scheduled_count }}</option>
+        <option value="all" {{ 'selected' if timing_filter == 'all' }}>All</option>
+      </select>
+    </div>
     <div class="ff"><span>Ready to send</span>
-      <select onchange="location.href=this.value" aria-label="Filter by next step due">
-        <option value="/leads" {{ 'selected' if due_filter < 0 }}>Any step</option>
+      <select onchange="setParam('due', this.value)" aria-label="Filter by next step">
+        <option value="" {{ 'selected' if due_filter < 0 }}>Any step</option>
         {% for i in range(total_steps) %}
-        <option value="/leads?due={{i}}" {{ 'selected' if due_filter == i }}>{{ 'First email' if i == 0 else 'Follow-up ' ~ i }} · {{ due_counts.get(i, 0) }}</option>
+        <option value="{{i}}" {{ 'selected' if due_filter == i }}>{{ 'First email' if i == 0 else 'Follow-up ' ~ i }} · {{ due_counts.get(i, 0) }}</option>
         {% endfor %}
       </select>
     </div>
     <div class="ff"><span>Status</span>
-      <select onchange="location.href=this.value" aria-label="Filter by lead status">
-        <option value="/leads" {{ 'selected' if not status_filter }}>All</option>
+      <select onchange="setParam('status', this.value)" aria-label="Filter by lead status">
+        <option value="" {{ 'selected' if not status_filter }}>All</option>
         {% for s in ['contacted','replied','bounced','finished'] %}
-        <option value="/leads?status={{s}}" {{ 'selected' if status_filter == s }}>{{ s|capitalize }}</option>
+        <option value="{{s}}" {{ 'selected' if status_filter == s }}>{{ s|capitalize }}</option>
         {% endfor %}
       </select>
     </div>
   </div>
 </div>
+<script>
+// Update a single filter param and preserve the rest (page resets to 1).
+function setParam(k,v){var u=new URL(location.href);
+  if(v===''||v===null){u.searchParams.delete(k);}else{u.searchParams.set(k,v);}
+  u.searchParams.set('page','1');location.href=u.pathname+u.search;}
+</script>
 <div id="bulkBar" class="bulkbar" style="display:none">
   <span><b id="bulkCount">0</b> selected</span>
   <span class="muted" style="font-size:12px">Same email goes to everyone in a group — first emails and follow-ups stay separate:</span>
@@ -405,6 +420,7 @@ td .btn.sm{white-space:nowrap}
 {% set ns = namespace(f='') %}
 {% if status_filter %}{% set ns.f = ns.f ~ '&status=' ~ status_filter %}{% endif %}
 {% if due_filter >= 0 %}{% set ns.f = ns.f ~ '&due=' ~ due_filter %}{% endif %}
+{% if timing_filter and timing_filter != 'due' %}{% set ns.f = ns.f ~ '&timing=' ~ timing_filter %}{% endif %}
 <div class="pager">
   <span class="muted">{% if total_count %}Showing {{page_start}}–{{page_end}} of {{total_count}} leads{% else %}No leads{% endif %}</span>
   {% if total_pages > 1 %}
@@ -454,6 +470,14 @@ td .btn.sm{white-space:nowrap}
               <input type="hidden" name="cc" class="ccfield"><input type="hidden" name="bcc" class="bccfield">
               <button class="btn sm">{{pr.action}}</button></form>
           {% else %}<span class="stp lock" title="earlier email must go first">{{step_labels[i]}}</span>{% endif %}
+        {% endfor %}
+        </div>
+      {% elif pr.state == 'scheduled' %}
+        <div class="steps">
+        {% for i in range(total_steps) %}
+          {% if i in pr.sent %}<span class="stp done" title="already sent">✓ {{step_labels[i]}}</span>
+          {% elif i == pr.next %}<span class="stp sched" title="follow-up gap hasn't elapsed — unlocks on this date">⏳ {{step_labels[i]}} · {{ pr.due_at.strftime('%b %d') if pr.due_at else 'soon' }}</span>
+          {% else %}<span class="stp lock">{{step_labels[i]}}</span>{% endif %}
         {% endfor %}
         </div>
       {% elif pr.state == 'done' %}<span class="tag finished">all sent</span>
