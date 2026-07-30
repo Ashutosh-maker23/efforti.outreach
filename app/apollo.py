@@ -397,16 +397,18 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     Bounded by design. Apollo's search hides the company domain, so a reveal
     (1 credit) is the only way to learn who a contact really is — we can't skip
     a doomed reveal in advance. To keep a pull fast and cheap, this:
-      • reveals in bulk batches of 10 (people/bulk_match),
+      • reveals only as many people as the target still needs (in bulk calls of
+        up to 10), so a 1-lead pull spends ~1 credit, not a full batch of 10,
       • caps the total reveals at a budget tied to the target,
       • commits after every batch (partial progress always survives), and
       • stops early once the brand scope is full or two pages in a row add
         nothing new — instead of revealing every page of the result set.
     """
     target_total = brands * per_brand
-    # Reveal budget: a margin over the target covers duplicates and locked
-    # emails, with a hard ceiling so a run can never surprise-bill credits.
-    max_reveals = min(400, max(target_total, 20) * 2)
+    # Reveal budget: a hard ceiling so a run can never surprise-bill credits.
+    # Scales with the target but stays tight for small pulls — a 1-lead pull can
+    # never quietly burn dozens of credits hunting for a match.
+    max_reveals = min(400, max(target_total * 2, target_total + 6))
     stats = {"brands": brands, "per_brand": per_brand,
              "target_total": target_total, "fetched": 0, "has_email": 0,
              "imported": 0, "brands_filled": 0, "no_email": 0,
@@ -540,14 +542,22 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             imported_before_page = stats["imported"]
 
             if do_reveal:
-                for i in range(0, len(candidates), REVEAL_BATCH):
+                cursor = 0
+                while cursor < len(candidates):
                     if stats["imported"] >= target_total or \
                             stats["reveals"] >= max_reveals:
                         break
-                    room = max_reveals - stats["reveals"]
-                    batch = candidates[i:i + REVEAL_BATCH][:room]
-                    if not batch:
-                        break
+                    need = target_total - stats["imported"]   # leads still wanted
+                    room = max_reveals - stats["reveals"]      # credit budget left
+                    # Reveal ONLY as many as we still need — never a blind batch
+                    # of 10. Each reveal costs a credit, so for a 1-lead target we
+                    # reveal 1, check it, and stop the instant it lands; only if
+                    # it's a dupe/off-ICP do we reveal the next. Bounded by the
+                    # bulk ceiling, the budget, and the remaining candidates.
+                    batch_size = max(1, min(REVEAL_BATCH, need, room,
+                                            len(candidates) - cursor))
+                    batch = candidates[cursor:cursor + batch_size]
+                    cursor += batch_size
                     revealed = _bulk_enrich(batch)
                     stats["reveals"] += len(batch)
                     stats["has_email"] += len(batch)
