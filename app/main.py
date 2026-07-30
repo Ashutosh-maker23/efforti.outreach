@@ -100,7 +100,7 @@ def ctx(request, db, **kw):
         "mailboxes_all": db.query(Mailbox).order_by(Mailbox.id).all(),
         "active_mb": active_mb,
         "nav_counts": {
-            "leads": db.query(Lead).count(),
+            "leads": db.query(Lead).filter(Lead.status != "off_icp").count(),
             "active": db.query(Enrollment)
                         .filter(Enrollment.status == "active").count(),
         },
@@ -153,7 +153,7 @@ def dashboard(request: Request, polled: int = 0, pollskip: int = 0, saved: int =
             recent_q = recent_q.filter(Event.detail.contains(mb.email))
             replies_q = replies_q.filter(Reply.mailbox_email == mb.email)
         else:
-            leads = db.query(Lead).count()
+            leads = db.query(Lead).filter(Lead.status != "off_icp").count()
             contacted = db.query(Message.lead_email).filter(
                 Message.status == "sent").distinct().count()
             # Leads flipped to "replied" by the IMAP poller = a real inbox reply.
@@ -344,13 +344,20 @@ def _leads_ctx(request, db, status="", due=-1, timing="due", page=1,
     # describe the same set. `base` is unordered (used for counts/aggregates);
     # ordering + pagination are applied to the view below.
     conds = []
-    if mb:
-        # This mailbox's leads (enrolled to it) + the shared verified pool.
+    # The mailbox scope (this mailbox's leads + the shared verified pool) is the
+    # normal view. But the 'off_icp' bucket is a GLOBAL set of kept-aside leads
+    # that are neither verified nor enrolled, so that filter bypasses the scope
+    # — otherwise it would always come back empty.
+    if mb and status != "off_icp":
         enrolled_ids = [e.lead_id for e in db.query(Enrollment.lead_id)
                         .filter(Enrollment.mailbox_id == mb.id)]
         conds.append(or_(Lead.id.in_(enrolled_ids), Lead.status == "verified"))
     if status:
         conds.append(Lead.status == status)
+    else:
+        # Default views never show the kept-aside off-ICP bucket — it has its
+        # own "Off-ICP (kept)" Status filter.
+        conds.append(Lead.status != "off_icp")
     base = db.query(Lead).filter(*conds)
 
     # Steps in the active sequence (0 = first email, 1.. = follow-ups).
@@ -469,7 +476,8 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                brands: int = 0, per_brand: int = 0, brands_filled: int = 0,
                fetched: int = 0, imported: int = 0, brand_full: int = 0,
                dupe: int = 0, no_email: int = 0, icp: int = 0, loc: int = 0,
-               reveals: int = 0, stopped: int = 0, exhausted: int = 0,
+               reveals: int = 0, known: int = 0, officp: int = 0,
+               exhausted: int = 0,
                one: str = "", bulk: int = 0, bsent: int = 0,
                bskip: int = 0, bnomb: int = 0, bstep: int = -1,
                enr: int = 0, provider: str = "", ai: int = 0, fb: int = 0,
@@ -492,7 +500,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                            "imported": imported, "brand_full": brand_full,
                            "dupe": dupe, "no_email": no_email, "icp": icp,
                            "location": loc, "reveals": reveals,
-                           "stopped_dry": bool(stopped),
+                           "known": known, "off_icp_kept": officp,
                            "target_total": brands * per_brand,
                            "exhausted": bool(exhausted)}
         send_feedback = None
@@ -613,7 +621,7 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
             f"&dupe={s['skipped_duplicate']}&no_email={s['no_email']}"
             f"&icp={s['skipped_icp'] + s['skipped_prescreen']}"
             f"&loc={loc_skips}&reveals={s['reveals']}"
-            f"&stopped={1 if s['stopped_dry'] else 0}"
+            f"&known={s['skipped_known']}&officp={s['off_icp_kept']}"
             f"&exhausted={1 if s['exhausted'] else 0}",
             status_code=303)
     finally:

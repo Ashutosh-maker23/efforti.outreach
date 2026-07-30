@@ -54,9 +54,11 @@
 {% set tone = 'var(--ok)' if ok else 'var(--warn)' %}
 <div class="note-box" style="background:color-mix(in srgb,{{tone}} 12%,transparent);border-color:color-mix(in srgb,{{tone}} 30%,transparent);margin-bottom:22px">
   <svg viewBox="0 0 24 24" fill="none" stroke="{{tone}}">{% if ok %}<path d="M20 6 9 17l-5-5"/>{% else %}<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>{% endif %}</svg>
-  <span><strong style="color:{{tone}}">Imported {{pull_result.imported}} exec{{'' if pull_result.imported==1 else 's'}} across {{pull_result.brands_filled}} brand{{'' if pull_result.brands_filled==1 else 's'}} · {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} used.</strong>
-  Target was {{pull_result.per_brand}} per brand × {{pull_result.brands}} brands ({{pull_result.target_total}} max). Scanned {{pull_result.fetched}} contacts · {{pull_result.icp}} skipped as off-ICP (wrong industry/size/startup fit — details in <a href="/activity">Activity</a>){% if pull_result.location %} · {{pull_result.location}} skipped (HQ outside your locations){% endif %} · {{pull_result.brand_full}} skipped (brand already full) · {{pull_result.dupe}} duplicate · {{pull_result.no_email}} without an email.
-  {% if pull_result.stopped_dry %}<br><strong>Stopped early to protect your credits</strong> — several reveals in a row turned up only leads you already have, so you've likely <strong>saturated this ICP</strong>. Broaden <em>Industry focus</em>, <em>Company traits</em>, <em>Locations</em> or <em>Company size</em> to reach fresh brands — repeating the same filters will keep costing credits for duplicates.{% elif pull_result.exhausted and pull_result.imported < pull_result.target_total %}<br><strong>Pool exhausted for these filters</strong> — broaden the industry/locations or headcount range to reach more brands.{% endif %}</span>
+  <span><strong style="color:{{tone}}">Imported {{pull_result.imported}} exec{{'' if pull_result.imported==1 else 's'}} into your pipeline · {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} used.</strong>
+  {% if pull_result.known %}<strong>{{pull_result.known}} already-owned skipped free</strong> (0 credits — no re-reveal). {% endif %}
+  {% if pull_result.off_icp_kept %}{{pull_result.off_icp_kept}} off-ICP contact{{'' if pull_result.off_icp_kept==1 else 's'}} <strong>kept</strong> (nothing wasted — find them under <em>Status → Off-ICP (kept)</em>). {% endif %}
+  Target {{pull_result.per_brand}}×{{pull_result.brands}} ({{pull_result.target_total}} max) · scanned {{pull_result.fetched}} · {{pull_result.dupe}} duplicate · {{pull_result.no_email}} without an email.
+  {% if not ok %}<br><strong>No full ICP match this run.</strong> {% if pull_result.known %}These filters mostly surface leads you already own — broaden <em>Industry focus</em>, <em>Company traits</em>, <em>Locations</em> or <em>Company size</em> to reach fresh brands.{% else %}Try broadening those filters to reach more brands.{% endif %}{% endif %}</span>
 </div>
 {% endif %}
 
@@ -397,6 +399,7 @@ td .btn.sm{white-space:nowrap}
         {% for s in ['contacted','replied','bounced','finished'] %}
         <option value="{{s}}" {{ 'selected' if status_filter == s }}>{{ s|capitalize }}</option>
         {% endfor %}
+        <option value="off_icp" {{ 'selected' if status_filter == 'off_icp' }}>Off-ICP (kept)</option>
       </select>
     </div>
   </div>

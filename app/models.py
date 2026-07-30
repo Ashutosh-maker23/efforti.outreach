@@ -86,6 +86,7 @@ class Lead(Base):
     company_desc = Column(Text, default="")        # short blurb, feeds AI opener
     icp_score = Column(Integer, default=-1)        # 0–100 fit vs ICP; -1 = unscored (CSV)
     icp_reasons = Column(Text, default="")         # human-readable scoring breakdown
+    apollo_id = Column(String, default="", index=True)  # Apollo person id — dedupe BEFORE a paid reveal
     company_research = Column(Text, default="")    # live web research, per company, feeds the intro
     researched_at = Column(DateTime)               # when company_research was last refreshed
     intro = Column(Text, default="")               # AI-written 2-paragraph brand intro for the PRIMARY email
@@ -243,6 +244,7 @@ def _migrate_sqlite():
             "intro": "TEXT DEFAULT ''",
             "icp_score": "INTEGER DEFAULT -1",
             "icp_reasons": "TEXT DEFAULT ''",
+            "apollo_id": "VARCHAR DEFAULT ''",
         },
     }
     with engine.begin() as conn:

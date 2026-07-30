@@ -379,42 +379,30 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                 max_pages=40, do_reveal=True, target_hints=None,
                 prefer_remote=False) -> dict:
     """Import up to `per_brand` top execs at up to `brands` companies
-    (default 5 execs × 20 brands = 100 targets), running every revealed
-    contact through the same verify/dedupe/suppression/one-per-domain gates as
-    the CSV importer PLUS the ICP gate (icp.score_lead): revealed companies
-    that aren't a real fit — wrong industry, headcount out of band, public,
-    free-mail, stale title, weak startup signals — are skipped, and every
-    imported lead carries an icp_score/icp_reasons explaining its fit.
-    `locations` additionally enforces a GENUINE HQ-location gate (icp
-    .location_match) that drops the overseas brands Apollo's search leaks, and
-    `target_hints` (from the UI industry dropdown) count the chosen verticals
-    as on-target when scoring. `prefer_remote` biases scoring toward
-    remote-first / distributed-team companies (Efforti's sharpest-pain buyer):
-    remote teams are boosted and co-located ones penalised below the bar. Apollo
-    exposes no remote filter, so this is detected from the revealed company —
-    it therefore kicks in on import, not in the free preview.
+    (default 5 execs × 20 brands = 100 targets). Full ICP fits land in the
+    sending pool (status 'verified'); every other revealed contact is KEPT as
+    'off_icp' (wrong HQ, below the ICP bar, or over the per-brand cap) rather
+    than discarded — a paid reveal is never thrown away. `target_hints` count
+    the chosen verticals as on-target; `prefer_remote` biases scoring toward
+    remote/distributed teams (detected on import — Apollo has no remote filter).
 
-    Bounded by design. Apollo's search hides the company domain, so a reveal
-    (1 credit) is the only way to learn who a contact really is — we can't skip
-    a doomed reveal in advance. To keep a pull fast and cheap, this:
-      • reveals only as many people as the target still needs (in bulk calls of
-        up to 10), so a 1-lead pull spends ~1 credit, not a full batch of 10,
-      • caps the total reveals at a budget tied to the target,
-      • commits after every batch (partial progress always survives), and
-      • stops early once the brand scope is full or two pages in a row add
-        nothing new — instead of revealing every page of the result set.
+    Credit-frugal by design:
+      • Already-extracted people are skipped BEFORE revealing (apollo_id
+        dedupe), so a repeat pull never pays to rediscover a lead we hold; a
+        duplicate that slips through backfills its id so the next pull skips it.
+      • Reveals only as many NEW people as the target still needs (bulk calls of
+        up to 10), under a tight budget — a 1-lead pull spends ~1 credit.
+      • Commits after every batch (partial progress survives) and stops once the
+        target's met, the brand scope is full, or the search pool runs dry.
     """
     target_total = brands * per_brand
-    # Reveal budget: a hard ceiling so a run can never surprise-bill credits.
-    # Scales with the target but stays tight for small pulls — a 1-lead pull can
-    # never quietly burn dozens of credits hunting for a match.
-    max_reveals = min(400, max(target_total * 2, target_total + 6))
-    # STRICT early-stop: once this many reveals in a row turn up nothing NEW
-    # (all duplicates / already-full brands / off-ICP), the ICP is saturated for
-    # these filters — stop instead of paying credit after credit to rediscover
-    # leads we already hold. This is the real guard for a repeat pull into a big
-    # existing list; the budget above is just the absolute backstop.
-    wasted_cap = max(3, target_total)
+    # Reveal budget: a hard, tight ceiling so a run can never surprise-bill
+    # credits. Kept small for tiny pulls, because now (a) already-extracted
+    # people are skipped for FREE before any reveal (apollo_id dedupe) and
+    # (b) every reveal we DO pay for is KEPT (off-ICP ones land in an off_icp
+    # bucket, never discarded) — so the ceiling only bounds how far one run
+    # reaches, it is not a "waste" guard any more.
+    max_reveals = min(400, max(target_total * 2, target_total + 2))
     stats = {"brands": brands, "per_brand": per_brand,
              "target_total": target_total, "fetched": 0, "has_email": 0,
              "imported": 0, "brands_filled": 0, "no_email": 0,
@@ -423,8 +411,8 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
              "skipped_brand_full": 0, "skipped_scope": 0,
              "skipped_invalid": 0, "skipped_icp": 0, "skipped_prescreen": 0,
              "skipped_location": 0, "skipped_location_prereveal": 0,
-             "remote_fit": 0, "icp_reject_reasons": {},
-             "exhausted": False, "stopped_dry": False}
+             "skipped_known": 0, "off_icp_kept": 0,
+             "remote_fit": 0, "icp_reject_reasons": {}, "exhausted": False}
     if not os.environ.get("APOLLO_API_KEY"):
         log(db, "error", "apollo pull skipped: APOLLO_API_KEY not set")
         return stats
@@ -435,6 +423,10 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
 
     suppressed = {s.email for s in db.query(Suppression).all()}
     existing_emails = {l.email for l in db.query(Lead.email).all()}
+    # Apollo person-ids we already hold — the key to NOT paying to rediscover a
+    # lead: any search hit whose id is in here is skipped BEFORE the reveal
+    # (free). Grows as this run stores/backfills ids.
+    known_ids = {a for (a,) in db.query(Lead.apollo_id).all() if a}
     # How many execs we already hold per domain — so topping a brand up never
     # exceeds per_brand across separate pulls.
     domain_counts = {}
@@ -454,68 +446,89 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         return True
 
     def _consider(enriched: dict) -> bool:
-        """Run one revealed person through every gate; import if it passes.
-        Returns True only when a new Lead was added."""
+        """Store one REVEALED person — we already paid the credit, so nothing is
+        thrown away. Returns True only when a VERIFIED (in-pool) lead was added;
+        an off-ICP reveal is still KEPT (status 'off_icp', out of the sending
+        pool) but returns False so it doesn't count toward the target. The only
+        non-stores are a suppressed contact, an undeliverable address, or a
+        DUPLICATE — and a duplicate still gets its apollo_id backfilled so the
+        very next pull skips it for free."""
         f = _person_to_fields(enriched)
         email = (f["email"] or "").lower()
+        apid = (f.get("apollo_id") or "").strip()
         if not _usable_email(email):
             stats["no_email"] += 1
+            return False
+        if email in existing_emails:
+            stats["skipped_duplicate"] += 1
+            # Backfill the id onto the lead we already hold, so future pulls skip
+            # this person BEFORE revealing — this becomes the LAST credit we ever
+            # spend on them.
+            if apid and apid not in known_ids:
+                dup = (db.query(Lead)
+                       .filter(Lead.email == email,
+                               (Lead.apollo_id == "") |
+                               (Lead.apollo_id.is_(None))).first())
+                if dup is not None:
+                    dup.apollo_id = apid
+                known_ids.add(apid)
             return False
         if email in suppressed:
             stats["skipped_suppressed"] += 1
             return False
-        if email in existing_emails:
-            stats["skipped_duplicate"] += 1
-            return False
         if verify_email(email, do_mx=False) != "ok":
             stats["skipped_invalid"] += 1
             return False
-        # Genuine location gate: Apollo's search leaks companies that merely
-        # operate in the region, so verify the REVEALED HQ (org country/address,
-        # person country as fallback) against what was actually requested.
+        # Paid to reveal this unique, deliverable, non-suppressed lead — KEEP it,
+        # ICP-pass or not. `in_pool` decides the bucket: a full fit enters the
+        # sending pool (status verified); anything else is stored as 'off_icp'
+        # (wrong HQ, below the ICP bar, or over the per-brand cap) so it's never
+        # wasted, just held aside for later.
         org_obj = enriched.get("organization") or {}
-        loc_ok, loc_why = location_match(locations, org_obj, enriched)
+        loc_ok, _ = location_match(locations, org_obj, enriched)
+        icp = score_lead(f, org_obj, band, target_hints, prefer_remote)
+        domain = normalize_domain(f["company_domain"]) or email.split("@", 1)[1]
+        room = _room(domain)
+        in_pool = loc_ok and icp["verdict"] == "pass" and room
+
+        tally = stats["icp_reject_reasons"]
         if not loc_ok:
             stats["skipped_location"] += 1
-            tally = stats["icp_reject_reasons"]
             tally["wrong location"] = tally.get("wrong location", 0) + 1
-            return False
-        # ICP extraction: judge the REVEALED company/person against the ICP
-        # (industry, real headcount, startup signals, live title) — this is
-        # what keeps a 50-person restaurant group with a "CEO" out of the DB.
-        icp = score_lead(f, org_obj, band, target_hints, prefer_remote)
-        if icp["verdict"] != "pass":
+        elif icp["verdict"] != "pass":
             stats["skipped_icp"] += 1
             why = (icp["reasons"][0] if icp["reasons"] else "?").split(":")[0]
-            tally = stats["icp_reject_reasons"]
             tally[why] = tally.get(why, 0) + 1
-            return False
-        if "remote/distributed team" in icp["reasons"]:
-            stats["remote_fit"] += 1
-        domain = normalize_domain(f["company_domain"]) or email.split("@", 1)[1]
-        if not _room(domain):
+        elif not room:
             held = domain_counts.get(domain, 0) + brand_domains.get(domain, 0)
             if held >= per_brand:
                 stats["skipped_brand_full"] += 1
             else:
                 stats["skipped_scope"] += 1
-            return False
+        elif "remote/distributed team" in icp["reasons"]:
+            stats["remote_fit"] += 1
+
         db.add(Lead(
             email=email, first_name=f["first_name"], last_name=f["last_name"],
             title=f["title"], company=f["company"], company_domain=domain,
             company_size=f["company_size"], industry=f["industry"],
-            company_desc=f["company_desc"],
+            company_desc=f["company_desc"], apollo_id=apid,
             trigger=icp["trigger"] or f.get("trigger", ""),
             icp_score=icp["score"], icp_reasons="; ".join(icp["reasons"]),
-            source="apollo", status="verified", verify_result="ok",
+            source="apollo", verify_result="ok",
+            status="verified" if in_pool else "off_icp",
         ))
         existing_emails.add(email)
-        brand_domains[domain] = brand_domains.get(domain, 0) + 1
-        stats["imported"] += 1
-        return True
+        if apid:
+            known_ids.add(apid)
+        if in_pool:
+            brand_domains[domain] = brand_domains.get(domain, 0) + 1
+            stats["imported"] += 1
+            return True
+        stats["off_icp_kept"] += 1
+        return False
 
     stale_pages = 0                        # consecutive pages that added nothing
-    dry = 0                                # consecutive reveals with no new lead
     try:
         for page in range(1, max_pages + 1):
             if stats["imported"] >= target_total or \
@@ -534,7 +547,13 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             # it BEFORE spending the reveal credit.
             candidates = []
             for p in people:
-                if not (p.get("has_email") and p.get("id")):
+                pid = p.get("id")
+                if not (p.get("has_email") and pid):
+                    continue
+                # Already extracted? Skip BEFORE revealing — THE credit saver:
+                # a person already in the DB never costs a reveal again.
+                if pid in known_ids:
+                    stats["skipped_known"] += 1
                     continue
                 pre_org = p.get("organization") or {}
                 if not prescreen_org(pre_org)[0]:
@@ -545,7 +564,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                 if not location_match(locations, pre_org)[0]:
                     stats["skipped_location_prereveal"] += 1
                     continue
-                candidates.append(p.get("id"))
+                candidates.append(pid)
             stats["no_email"] += sum(1 for p in people if not p.get("has_email"))
             imported_before_page = stats["imported"]
 
@@ -558,10 +577,11 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                     need = target_total - stats["imported"]   # leads still wanted
                     room = max_reveals - stats["reveals"]      # credit budget left
                     # Reveal ONLY as many as we still need — never a blind batch
-                    # of 10. Each reveal costs a credit, so for a 1-lead target we
-                    # reveal 1, check it, and stop the instant it lands; only if
-                    # it's a dupe/off-ICP do we reveal the next. Bounded by the
-                    # bulk ceiling, the budget, and the remaining candidates.
+                    # of 10 — so a 1-lead target reveals ~1 and stops the instant
+                    # a full fit lands. Bounded by the bulk ceiling, the (tight)
+                    # budget, and the remaining candidates. Dupes are already
+                    # gone (skipped pre-reveal), so these reveals are all NEW
+                    # people, and every one is kept.
                     batch_size = max(1, min(REVEAL_BATCH, need, room,
                                             len(candidates) - cursor))
                     batch = candidates[cursor:cursor + batch_size]
@@ -571,26 +591,12 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                     stats["has_email"] += len(batch)
                     # ids Apollo returned no match for still cost nothing usable.
                     stats["no_email"] += max(0, len(batch) - len(revealed))
-                    got = stats["imported"]
                     for enriched in revealed:
                         _consider(enriched)
                         if stats["imported"] >= target_total:
                             break
                     db.commit()                    # partial progress survives
-                    # Strict credit cap: a batch that landed a new lead resets the
-                    # dry streak; a batch that landed nothing adds its reveals to
-                    # it. Hit the cap and the ICP is saturated for these filters —
-                    # stop paying to rediscover leads we already hold.
-                    if stats["imported"] > got:
-                        dry = 0
-                    else:
-                        dry += len(batch)
-                        if dry >= wasted_cap:
-                            stats["stopped_dry"] = True
-                            break
                     time.sleep(0.2)                # gentle pacing between calls
-                if stats["stopped_dry"]:
-                    break                          # nothing new is landing — done
 
             # Early stop: if a whole page of reveals produced no new leads, the
             # brand scope is full (or the pool is dry) and further pages can only
@@ -615,7 +621,9 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     log(db, "import",
         f"Apollo pull: imported {stats['imported']} execs across "
         f"{stats['brands_filled']} brands (target {per_brand}×{brands}"
-        f"={target_total}) · {stats['reveals']} reveals · "
+        f"={target_total}) · {stats['reveals']} reveals/credits · "
+        f"{stats['skipped_known']} already-owned skipped free · "
+        f"{stats['off_icp_kept']} off-ICP kept · "
         f"{stats['fetched']} scanned · "
         f"{off_icp} off-ICP ({stats['skipped_prescreen']} pre-reveal"
         + (f"; top: {top_reasons}" if top_reasons else "") + ") · "
@@ -625,8 +633,6 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         f"{stats['skipped_duplicate']} duplicate · "
         f"{stats['no_email']} without email"
         + (" · pool exhausted" if stats["exhausted"] else "")
-        + (f" · stopped early: {wasted_cap} reveals in a row found nothing new "
-           "(ICP saturated for these filters)" if stats["stopped_dry"] else "")
         + (" · reveal budget reached" if stats["reveals"] >= max_reveals
            and stats["imported"] < target_total else ""))
     db.commit()
