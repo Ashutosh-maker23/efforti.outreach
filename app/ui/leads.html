@@ -50,11 +50,13 @@
 {% endif %}
 
 {% if pull_result %}
-<div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-  <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-  <span><strong style="color:var(--ok)">Imported {{pull_result.imported}} execs across {{pull_result.brands_filled}} brand{{'' if pull_result.brands_filled==1 else 's'}}.</strong>
+{% set ok = pull_result.imported > 0 %}
+{% set tone = 'var(--ok)' if ok else 'var(--warn)' %}
+<div class="note-box" style="background:color-mix(in srgb,{{tone}} 12%,transparent);border-color:color-mix(in srgb,{{tone}} 30%,transparent);margin-bottom:22px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="{{tone}}">{% if ok %}<path d="M20 6 9 17l-5-5"/>{% else %}<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>{% endif %}</svg>
+  <span><strong style="color:{{tone}}">Imported {{pull_result.imported}} exec{{'' if pull_result.imported==1 else 's'}} across {{pull_result.brands_filled}} brand{{'' if pull_result.brands_filled==1 else 's'}} · {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} used.</strong>
   Target was {{pull_result.per_brand}} per brand × {{pull_result.brands}} brands ({{pull_result.target_total}} max). Scanned {{pull_result.fetched}} contacts · {{pull_result.icp}} skipped as off-ICP (wrong industry/size/startup fit — details in <a href="/activity">Activity</a>){% if pull_result.location %} · {{pull_result.location}} skipped (HQ outside your locations){% endif %} · {{pull_result.brand_full}} skipped (brand already full) · {{pull_result.dupe}} duplicate · {{pull_result.no_email}} without an email.
-  {% if pull_result.exhausted and pull_result.imported < pull_result.target_total %}<br><strong>Pool exhausted for these filters</strong> — broaden the keywords/locations or headcount range to reach more brands.{% endif %}</span>
+  {% if pull_result.stopped_dry %}<br><strong>Stopped early to protect your credits</strong> — several reveals in a row turned up only leads you already have, so you've likely <strong>saturated this ICP</strong>. Broaden <em>Industry focus</em>, <em>Company traits</em>, <em>Locations</em> or <em>Company size</em> to reach fresh brands — repeating the same filters will keep costing credits for duplicates.{% elif pull_result.exhausted and pull_result.imported < pull_result.target_total %}<br><strong>Pool exhausted for these filters</strong> — broaden the industry/locations or headcount range to reach more brands.{% endif %}</span>
 </div>
 {% endif %}
 

@@ -409,6 +409,12 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     # Scales with the target but stays tight for small pulls — a 1-lead pull can
     # never quietly burn dozens of credits hunting for a match.
     max_reveals = min(400, max(target_total * 2, target_total + 6))
+    # STRICT early-stop: once this many reveals in a row turn up nothing NEW
+    # (all duplicates / already-full brands / off-ICP), the ICP is saturated for
+    # these filters — stop instead of paying credit after credit to rediscover
+    # leads we already hold. This is the real guard for a repeat pull into a big
+    # existing list; the budget above is just the absolute backstop.
+    wasted_cap = max(3, target_total)
     stats = {"brands": brands, "per_brand": per_brand,
              "target_total": target_total, "fetched": 0, "has_email": 0,
              "imported": 0, "brands_filled": 0, "no_email": 0,
@@ -417,7 +423,8 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
              "skipped_brand_full": 0, "skipped_scope": 0,
              "skipped_invalid": 0, "skipped_icp": 0, "skipped_prescreen": 0,
              "skipped_location": 0, "skipped_location_prereveal": 0,
-             "remote_fit": 0, "icp_reject_reasons": {}, "exhausted": False}
+             "remote_fit": 0, "icp_reject_reasons": {},
+             "exhausted": False, "stopped_dry": False}
     if not os.environ.get("APOLLO_API_KEY"):
         log(db, "error", "apollo pull skipped: APOLLO_API_KEY not set")
         return stats
@@ -508,6 +515,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         return True
 
     stale_pages = 0                        # consecutive pages that added nothing
+    dry = 0                                # consecutive reveals with no new lead
     try:
         for page in range(1, max_pages + 1):
             if stats["imported"] >= target_total or \
@@ -563,12 +571,26 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                     stats["has_email"] += len(batch)
                     # ids Apollo returned no match for still cost nothing usable.
                     stats["no_email"] += max(0, len(batch) - len(revealed))
+                    got = stats["imported"]
                     for enriched in revealed:
                         _consider(enriched)
                         if stats["imported"] >= target_total:
                             break
                     db.commit()                    # partial progress survives
+                    # Strict credit cap: a batch that landed a new lead resets the
+                    # dry streak; a batch that landed nothing adds its reveals to
+                    # it. Hit the cap and the ICP is saturated for these filters —
+                    # stop paying to rediscover leads we already hold.
+                    if stats["imported"] > got:
+                        dry = 0
+                    else:
+                        dry += len(batch)
+                        if dry >= wasted_cap:
+                            stats["stopped_dry"] = True
+                            break
                     time.sleep(0.2)                # gentle pacing between calls
+                if stats["stopped_dry"]:
+                    break                          # nothing new is landing — done
 
             # Early stop: if a whole page of reveals produced no new leads, the
             # brand scope is full (or the pool is dry) and further pages can only
@@ -603,6 +625,8 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         f"{stats['skipped_duplicate']} duplicate · "
         f"{stats['no_email']} without email"
         + (" · pool exhausted" if stats["exhausted"] else "")
+        + (f" · stopped early: {wasted_cap} reveals in a row found nothing new "
+           "(ICP saturated for these filters)" if stats["stopped_dry"] else "")
         + (" · reveal budget reached" if stats["reveals"] >= max_reveals
            and stats["imported"] < target_total else ""))
     db.commit()

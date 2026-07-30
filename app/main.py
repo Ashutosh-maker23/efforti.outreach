@@ -469,7 +469,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                brands: int = 0, per_brand: int = 0, brands_filled: int = 0,
                fetched: int = 0, imported: int = 0, brand_full: int = 0,
                dupe: int = 0, no_email: int = 0, icp: int = 0, loc: int = 0,
-               exhausted: int = 0,
+               reveals: int = 0, stopped: int = 0, exhausted: int = 0,
                one: str = "", bulk: int = 0, bsent: int = 0,
                bskip: int = 0, bnomb: int = 0, bstep: int = -1,
                enr: int = 0, provider: str = "", ai: int = 0, fb: int = 0,
@@ -491,7 +491,8 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                            "brands_filled": brands_filled, "fetched": fetched,
                            "imported": imported, "brand_full": brand_full,
                            "dupe": dupe, "no_email": no_email, "icp": icp,
-                           "location": loc,
+                           "location": loc, "reveals": reveals,
+                           "stopped_dry": bool(stopped),
                            "target_total": brands * per_brand,
                            "exhausted": bool(exhausted)}
         send_feedback = None
@@ -611,7 +612,8 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
             f"&imported={s['imported']}&brand_full={s['skipped_brand_full']}"
             f"&dupe={s['skipped_duplicate']}&no_email={s['no_email']}"
             f"&icp={s['skipped_icp'] + s['skipped_prescreen']}"
-            f"&loc={loc_skips}"
+            f"&loc={loc_skips}&reveals={s['reveals']}"
+            f"&stopped={1 if s['stopped_dry'] else 0}"
             f"&exhausted={1 if s['exhausted'] else 0}",
             status_code=303)
     finally:
