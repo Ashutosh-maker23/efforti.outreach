@@ -22,29 +22,29 @@ from .models import Sequence, SequenceStep
 
 # Bump this name whenever the canonical copy changes so a fresh version seeds
 # cleanly and becomes the single active default (older ones are retired below).
-SEQUENCE_NAME = "Efforti — CEO cold sequence v3"
+SEQUENCE_NAME = "Efforti CEO cold sequence v4"
 
 # ── Email 1 · Day 0 · opens the thread ──────────────────────────────────────
 STEP_0_SUBJECT = "who's blocked at {{company}} right now?"
 # Manager alternates: "the question no dashboard answers" · "9:12 am at {{company}}"
 STEP_0_BODY = """Hi {{first_name}},
 {{personalization}}
-If I asked you right now — who on your team has been blocked the longest, and on what — could you answer without calling a meeting or pinging three managers?
+If I asked you right now, who on your team has been blocked the longest, and on what, could you answer without calling a meeting or pinging three managers?
 
-Most leaders can't. Not because they lack dashboards, but because dashboards only know what someone typed into a tracker — and most real work never gets typed in.
+Most leaders can't. Not because they lack dashboards, but because dashboards only know what someone typed into a tracker, and most real work never gets typed in.
 
-Efforti gets the answer differently: it asks your people. A 3-minute check-in in chat each morning, read by AI, returned to you as one brief — who's on track, who's stuck and for how long, who's gone quiet.
+Efforti gets the answer differently: it asks your people. A 3-minute check-in in chat each morning, read by AI, returned to you as one brief: who's on track, who's stuck and for how long, who's gone quiet.
 
 Worth 20 minutes this week?
 
-P.S. Prefer to poke at it yourself first? agents.efforti.com — first team live in ~15 minutes, no integrations."""
+P.S. Prefer to poke at it yourself first? agents.efforti.com. First team live in ~15 minutes, no integrations."""
 
 # ── Email 2 · Day 3 · reply in email 1's thread (blank subject) ─────────────
 STEP_1_BODY = """Hi {{first_name}},
 
 A manager using Efforti told us: "I haven't run a status meeting in weeks, and I've never had a clearer picture of my team."
 
-What changed: his team answers a 3-minute check-in in chat each morning. Efforti reads every reply, ranks blockers by how long they've been waiting, nudges the quiet ones, and hands him the summary before his first call. The Monday status meeting simply stopped being necessary — roughly 10 hours a week back on a 10-person team.
+What changed: his team answers a 3-minute check-in in chat each morning. Efforti reads every reply, ranks blockers by how long they've been waiting, nudges the quiet ones, and hands him the summary before his first call. The Monday status meeting simply stopped being necessary. Roughly 10 hours a week back on a 10-person team.
 
 Setup took 15 minutes. No Jira cleanup, no new tool for the team to learn.
 
@@ -57,18 +57,18 @@ STEP_2_BODY = """Hi {{first_name}},
 
 Quick math on one 10-person team running a daily standup: 15 minutes × 10 people × 5 days = 12.5 hours a week spent reporting work instead of moving it.
 
-Efforti's async check-ins collect the same truth in about 3 minutes per person — and catch what the meeting doesn't: the blocker nobody raises in front of the room, and the teammate who's quietly disengaging.
+Efforti's async check-ins collect the same truth in about 3 minutes per person, and catch what the meeting doesn't: the blocker nobody raises in front of the room, and the teammate who's quietly disengaging.
 
 That's ~10 hours back per team, every week. Across your teams at {{company}}, you can do the multiplication.
 
-Should I send over a two-week pilot plan? Zero cost, no integration — and you keep your numbers either way."""
+Should I send over a two-week pilot plan? Zero cost, no integration, and you keep your numbers either way."""
 
 # ── Email 4 · Day 12 · reply in email 3's thread (blank subject) ────────────
 STEP_3_BODY = """Hi {{first_name}},
 
-Last thought from me on this — the most expensive thing in delivery is rarely the work. It's the wait. Blockers sit for days because raising them means interrupting someone senior, and by the time they surface in a Friday review, the sprint has already slipped.
+Last thought from me on this: the most expensive thing in delivery is rarely the work. It's the wait. Blockers sit for days because raising them means interrupting someone senior, and by the time they surface in a Friday review, the sprint has already slipped.
 
-Efforti chases blockers the way a good chief of staff would: logs them from the daily check-in, tags the owner, follows up until resolved, and escalates with "waiting 3 days" attached — so nothing hides.
+Efforti chases blockers the way a good chief of staff would: logs them from the daily check-in, tags the owner, follows up until resolved, and escalates with "waiting 3 days" attached, so nothing hides.
 
 We hold our pilots to a measurable bar: at least one blocker caught early in two weeks, or you don't expand. That's the deal.
 
@@ -79,13 +79,13 @@ STEP_4_SUBJECT = "closing the loop"
 # Manager alternates: "last one from me" · "before I go"
 STEP_4_BODY = """Hi {{first_name}},
 
-I'll close the loop here — you're busy running {{company}}, and unanswered emails are their own kind of blocker.
+I'll close the loop here. You're busy running {{company}}, and unanswered emails are their own kind of blocker.
 
 Two things before I go.
 
 First: the product is self-serve at agents.efforti.com. A check-in agent for your first team is live in ~15 minutes, and the dashboard fills the same morning. If execution visibility becomes a priority next quarter, that link is the fastest proof you'll find.
 
-Second: if it's simply "not now," reply with a month — "Nov" is enough — and I'll come back exactly then. Not before.
+Second: if it's simply "not now," reply with a month, "Nov" is enough, and I'll come back exactly then. Not before.
 
 Thanks for reading, and good luck with the quarter."""
 
