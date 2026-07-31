@@ -621,7 +621,8 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
             f"&dupe={s['skipped_duplicate']}&no_email={s['no_email']}"
             f"&icp={s['skipped_icp'] + s['skipped_prescreen']}"
             f"&loc={loc_skips}&reveals={s['reveals']}"
-            f"&known={s['skipped_known']}&officp={s['off_icp_kept']}"
+            f"&known={s['skipped_known'] + s['skipped_identity']}"
+            f"&officp={s['off_icp_kept']}"
             f"&exhausted={1 if s['exhausted'] else 0}",
             status_code=303)
     finally:

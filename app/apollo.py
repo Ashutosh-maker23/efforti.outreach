@@ -16,6 +16,7 @@ revealing the entire result set. Requires APOLLO_API_KEY.
 Docs: https://docs.apollo.io/reference/people-search
 """
 import os
+import re
 import time
 
 import requests
@@ -23,6 +24,28 @@ import requests
 from .icp import location_match, parse_band, prescreen_org, score_lead
 from .importer import normalize_domain, verify_email
 from .models import Lead, Suppression, log
+
+# Legal-entity suffixes stripped when normalising a company name for identity
+# matching, so "BillMart FinTech Pvt Ltd" and "BillMart FinTech" collapse the
+# same. Deliberately conservative — only true suffixes, never brand words.
+_COMPANY_SUFFIX_RE = re.compile(
+    r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|gmbh|co|company)\b")
+
+
+def identity_key(first_name: str, company: str):
+    """A FREE dedupe key from the fields Apollo's search returns at 0 credits:
+    (normalised first_name, normalised company). Returns None when either is
+    missing (too weak to match on). Title is deliberately left out — it can
+    drift between search and reveal, and first_name+company is already unique
+    for an exec at a small company."""
+    first = re.sub(r"\s+", " ", (first_name or "").strip().lower())
+    comp = re.sub(r"\([^)]*\)", " ", (company or "").lower())   # drop "(Fintech)"
+    comp = re.sub(r"[^a-z0-9]+", " ", comp)                     # punctuation→space
+    comp = _COMPANY_SUFFIX_RE.sub(" ", comp)
+    comp = re.sub(r"\s+", " ", comp).strip()
+    if not first or not comp:
+        return None
+    return (first, comp)
 
 # People Search (api_search) returns OBFUSCATED previews — no email, last name
 # hidden — plus a per-record has_email flag. Real name/email/company come only
@@ -411,7 +434,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
              "skipped_brand_full": 0, "skipped_scope": 0,
              "skipped_invalid": 0, "skipped_icp": 0, "skipped_prescreen": 0,
              "skipped_location": 0, "skipped_location_prereveal": 0,
-             "skipped_known": 0, "off_icp_kept": 0,
+             "skipped_known": 0, "skipped_identity": 0, "off_icp_kept": 0,
              "remote_fit": 0, "icp_reject_reasons": {}, "exhausted": False}
     if not os.environ.get("APOLLO_API_KEY"):
         log(db, "error", "apollo pull skipped: APOLLO_API_KEY not set")
@@ -427,6 +450,18 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     # lead: any search hit whose id is in here is skipped BEFORE the reveal
     # (free). Grows as this run stores/backfills ids.
     known_ids = {a for (a,) in db.query(Lead.apollo_id).all() if a}
+    # FREE identity index for the legacy leads that don't have an id yet: maps
+    # (first_name, company) -> lead_id. Apollo's search returns first_name +
+    # company at 0 credits, so we can recognise these people and skip them
+    # BEFORE the paid reveal — then backfill their id so it's an exact skip next
+    # time. This is what protects the ~5k already-extracted leads.
+    ident_index = {}
+    for lid, fn, comp in db.query(
+            Lead.id, Lead.first_name, Lead.company).filter(
+            (Lead.apollo_id == "") | (Lead.apollo_id.is_(None))).all():
+        k = identity_key(fn, comp)
+        if k:
+            ident_index.setdefault(k, lid)
     # How many execs we already hold per domain — so topping a brand up never
     # exceeds per_brand across separate pulls.
     domain_counts = {}
@@ -550,12 +585,25 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                 pid = p.get("id")
                 if not (p.get("has_email") and pid):
                     continue
-                # Already extracted? Skip BEFORE revealing — THE credit saver:
-                # a person already in the DB never costs a reveal again.
+                # Already extracted (exact id)? Skip BEFORE revealing — THE
+                # credit saver: a person already in the DB never costs again.
                 if pid in known_ids:
                     stats["skipped_known"] += 1
                     continue
                 pre_org = p.get("organization") or {}
+                # FREE identity skip: recognise a legacy lead (no id yet) by its
+                # first_name + company — both returned by the search at 0 credits
+                # — and skip WITHOUT revealing, backfilling its id so next time
+                # it's an instant exact skip. This is what saves credits on the
+                # ~5k already-extracted leads.
+                ikey = identity_key(p.get("first_name"), pre_org.get("name"))
+                if ikey is not None and ikey in ident_index:
+                    stats["skipped_identity"] += 1
+                    lead = db.query(Lead).get(ident_index[ikey])
+                    if lead is not None and not (lead.apollo_id or ""):
+                        lead.apollo_id = pid
+                    known_ids.add(pid)
+                    continue
                 if not prescreen_org(pre_org)[0]:
                     stats["skipped_prescreen"] += 1
                     continue
@@ -566,6 +614,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                     continue
                 candidates.append(pid)
             stats["no_email"] += sum(1 for p in people if not p.get("has_email"))
+            db.commit()          # persist this page's free identity backfills
             imported_before_page = stats["imported"]
 
             if do_reveal:
@@ -622,7 +671,8 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         f"Apollo pull: imported {stats['imported']} execs across "
         f"{stats['brands_filled']} brands (target {per_brand}×{brands}"
         f"={target_total}) · {stats['reveals']} reveals/credits · "
-        f"{stats['skipped_known']} already-owned skipped free · "
+        f"{stats['skipped_known'] + stats['skipped_identity']} already-owned "
+        f"skipped free ({stats['skipped_identity']} by name+company) · "
         f"{stats['off_icp_kept']} off-ICP kept · "
         f"{stats['fetched']} scanned · "
         f"{off_icp} off-ICP ({stats['skipped_prescreen']} pre-reveal"
