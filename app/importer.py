@@ -289,16 +289,6 @@ def import_from_sent(db, mailbox, since_imap: str, before_imap: str,
                             verify_result="ok")
                 db.add(lead)
                 db.flush()
-                # Recover the brand's real details from Apollo by domain — the
-                # FREE org lookup (no person reveal, ZERO credits, cached per
-                # domain) — so {{company}} and the follow-up personalization read
-                # correctly instead of falling back to "your company".
-                try:
-                    from .apollo import backfill_company_facts
-                    if backfill_company_facts(lead):
-                        stats["enriched"] = stats.get("enriched", 0) + 1
-                except Exception:
-                    pass
                 # Opener already went out (step 0) — enroll at follow-up 1, due
                 # on the anchor Monday, threaded onto the original message.
                 enr = Enrollment(lead_id=lead.id, sequence_id=seq.id,

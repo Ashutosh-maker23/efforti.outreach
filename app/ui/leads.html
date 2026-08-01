@@ -46,7 +46,7 @@
   <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
     <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
     <span><strong style="color:var(--ok)">Picked up {{sent_result.imported}} lead{{'' if sent_result.imported==1 else 's'}} from {{sent_result.mailbox}}'s Sent folder</strong> across {{sent_result.messages}} message{{'' if sent_result.messages==1 else 's'}}.
-      Each has its opener marked as sent and <strong>follow-up 1 due {{sent_result.anchor.strftime('%a %d %b')}}</strong>, then the 2/4/7/10 working-day cadence.{% if sent_result.enriched %} Brand details pulled from Apollo for {{sent_result.enriched}} (free lookup, no credits) so follow-ups personalize correctly.{% endif %}<br>
+      Each has its opener marked as sent and <strong>follow-up 1 due {{sent_result.anchor.strftime('%a %d %b')}}</strong>, then the 2/4/7/10 working-day cadence.<br>
       <span class="muted" style="margin-top:4px;display:inline-block">Skipped: {{sent_result.skipped_duplicate}} already in your pipeline · {{sent_result.skipped_suppressed}} suppressed · {{sent_result.skipped_self}} your own address · {{sent_result.skipped_invalid}} unparseable.</span></span>
   </div>
   {% endif %}
@@ -239,7 +239,7 @@
 
   <div class="card">
     <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>Pick up an already-sent batch</h2>
-    <p class="muted" style="margin-bottom:12px;font-size:12px;line-height:1.55">Emailed a batch <strong style="color:var(--text-2)">outside the app</strong>? Scan a mailbox's <strong style="color:var(--text-2)">Sent</strong> folder for the dates you sent it. Each recipient is added with its opener marked as already sent and <strong style="color:var(--text-2)">follow-up 1 scheduled for the cutover Monday</strong>, then the 2/4/7/10 working-day cadence. Each brand's real details are pulled from <strong style="color:var(--text-2)">Apollo by domain</strong> (the free lookup — <strong style="color:var(--text-2)">no credits</strong>) so the follow-ups are properly personalized, not “your company”. Nothing is sent now — you send the follow-up from the table below.</p>
+    <p class="muted" style="margin-bottom:12px;font-size:12px;line-height:1.55">Emailed a batch <strong style="color:var(--text-2)">outside the app</strong>? Scan a mailbox's <strong style="color:var(--text-2)">Sent</strong> folder for the dates you sent it. Each recipient is added with its opener marked as already sent and <strong style="color:var(--text-2)">follow-up 1 scheduled for the cutover Monday</strong>, then the 2/4/7/10 working-day cadence. Nothing is sent now — you send the follow-up from the table below.</p>
     <form method="post" action="/leads/import_sent">
       <label>Mailbox to scan</label>
       <select name="mailbox_id" required>
