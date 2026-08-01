@@ -208,7 +208,11 @@ class Reply(Base):
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///outreach.db")
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False}
+    # `timeout` = SQLite busy-timeout (seconds): when a background job (e.g. the
+    # bulk personalization pre-generate) is writing, other connections WAIT for
+    # the lock instead of erroring "database is locked". check_same_thread=False
+    # lets those background threads share the engine.
+    connect_args={"check_same_thread": False, "timeout": 30}
     if DATABASE_URL.startswith("sqlite") else {})
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
