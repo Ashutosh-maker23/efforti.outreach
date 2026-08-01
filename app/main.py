@@ -493,12 +493,28 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                bskip: int = 0, bnomb: int = 0, bstep: int = -1,
                enr: int = 0, provider: str = "", ai: int = 0, fb: int = 0,
                res: int = 0, companies: int = 0, rleads: int = 0, web: int = 0,
-               noweb: int = 0, rfail: int = 0):
+               noweb: int = 0, rfail: int = 0,
+               si: int = 0, smb: int = 0, simp: int = 0, smsg: int = 0,
+               sdup: int = 0, ssup: int = 0, sslf: int = 0, sinv: int = 0,
+               serr: str = ""):
     db = SessionLocal()
     try:
         enrich_result = None
         if enr:
             enrich_result = {"provider": provider, "ai": ai, "fallback": fb}
+        # Sent-folder import result (Post/Redirect/Get from /leads/import_sent).
+        sent_result = None
+        if si:
+            if serr:
+                sent_result = {"error": serr}
+            else:
+                _smb = db.query(Mailbox).get(smb) if smb else None
+                mb_label = _smb.email if _smb else (
+                    "all active mailboxes" if smb == 0 else "")
+                sent_result = {"imported": simp, "messages": smsg,
+                               "skipped_duplicate": sdup, "skipped_suppressed": ssup,
+                               "skipped_self": sslf, "skipped_invalid": sinv,
+                               "mailbox": mb_label, "anchor": REANCHOR_AT}
         research_result = None
         if res:
             research_result = {"provider": provider, "companies": companies,
@@ -526,7 +542,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
             request, db, status=status, due=due, timing=timing, page=page,
             per_page=per_page, pull_result=pull_result,
             send_feedback=send_feedback, enrich_result=enrich_result,
-            research_result=research_result))
+            research_result=research_result, sent_result=sent_result))
     finally:
         db.close()
 
@@ -606,8 +622,16 @@ async def leads_import(request: Request, file: UploadFile = File(...),
         db.close()
 
 
-@app.post("/leads/import_sent", response_class=HTMLResponse)
-def leads_import_sent(request: Request, mailbox_id: int = Form(...),
+@app.get("/leads/import_sent")
+def leads_import_sent_get():
+    """A stray GET here (page refresh, address-bar reload, or someone opening the
+    URL directly) must not 405 — this endpoint only accepts the form POST. Bounce
+    it back to the Leads page instead of showing 'Method Not Allowed'."""
+    return RedirectResponse("/leads", status_code=303)
+
+
+@app.post("/leads/import_sent")
+def leads_import_sent(mailbox_id: int = Form(...),
                       since: str = Form("2026-07-23"),
                       before: str = Form("2026-07-25")):
     """Pick up a batch that was emailed OUTSIDE the app: scan the chosen
@@ -615,22 +639,46 @@ def leads_import_sent(request: Request, mailbox_id: int = Form(...),
     the opener recorded as already sent, and enroll each at follow-up 1 due on
     the cutover Monday (REANCHOR_AT). Nothing is sent here — the user drives the
     follow-up from the Leads page. `before` is the exclusive upper bound, so the
-    default window (2026-07-23 → 2026-07-25) covers Jul 23 and 24."""
+    default window (2026-07-23 → 2026-07-25) covers Jul 23 and 24.
+
+    Post/Redirect/Get: the result is passed back via query params and rendered by
+    the Leads GET page, so the browser lands on a normal, refreshable URL (no
+    'Method Not Allowed' on reload). Only short, non-sensitive codes go in the
+    URL — never the mailbox address."""
     db = SessionLocal()
     try:
-        mb = db.query(Mailbox).get(mailbox_id)
-        if not mb:
-            return templates.TemplateResponse(request, "leads.html", _leads_ctx(
-                request, db, sent_result={"error": "no_mailbox"}))
         try:
             since_imap = datetime.strptime(since, "%Y-%m-%d").strftime("%d-%b-%Y")
             before_imap = datetime.strptime(before, "%Y-%m-%d").strftime("%d-%b-%Y")
         except ValueError:
-            return templates.TemplateResponse(request, "leads.html", _leads_ctx(
-                request, db, sent_result={"error": "bad_dates"}))
-        result = import_from_sent(db, mb, since_imap, before_imap, REANCHOR_AT)
-        return templates.TemplateResponse(request, "leads.html", _leads_ctx(
-            request, db, sent_result=result))
+            return RedirectResponse("/leads?si=1&serr=bad_dates", status_code=303)
+        # mailbox_id 0 = scan EVERY active mailbox's Sent folder; else just one.
+        if mailbox_id == 0:
+            boxes = db.query(Mailbox).filter(Mailbox.active.is_(True)).all()
+        else:
+            mb = db.query(Mailbox).get(mailbox_id)
+            boxes = [mb] if mb else []
+        if not boxes:
+            return RedirectResponse("/leads?si=1&serr=no_mailbox", status_code=303)
+        agg = {"imported": 0, "messages": 0, "skipped_duplicate": 0,
+               "skipped_suppressed": 0, "skipped_self": 0, "skipped_invalid": 0}
+        errors = []
+        for mb in boxes:
+            r = import_from_sent(db, mb, since_imap, before_imap, REANCHOR_AT)
+            if r.get("error"):
+                errors.append(str(r["error"]).split(":")[0])
+            for k in agg:
+                agg[k] += r.get(k, 0)
+        # Nothing landed and every mailbox errored -> surface the first reason.
+        if agg["imported"] == 0 and errors:
+            return RedirectResponse(
+                f"/leads?si=1&smb={mailbox_id}&serr={errors[0][:40]}",
+                status_code=303)
+        return RedirectResponse(
+            f"/leads?si=1&smb={mailbox_id}&simp={agg['imported']}"
+            f"&smsg={agg['messages']}&sdup={agg['skipped_duplicate']}"
+            f"&ssup={agg['skipped_suppressed']}&sslf={agg['skipped_self']}"
+            f"&sinv={agg['skipped_invalid']}", status_code=303)
     finally:
         db.close()
 

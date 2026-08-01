@@ -45,7 +45,7 @@
   {% else %}
   <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
     <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">Picked up {{sent_result.imported}} lead{{'' if sent_result.imported==1 else 's'}} from {{sent_result.mailbox}}'s Sent folder</strong> across {{sent_result.messages}} message{{'' if sent_result.messages==1 else 's'}}.
+    <span><strong style="color:var(--ok)">Picked up {{sent_result.imported}} lead{{'' if sent_result.imported==1 else 's'}} from the Sent folder{% if sent_result.mailbox %} ({{sent_result.mailbox}}){% endif %}</strong> across {{sent_result.messages}} scanned message{{'' if sent_result.messages==1 else 's'}}.
       Each has its opener marked as sent and <strong>follow-up 1 due {{sent_result.anchor.strftime('%a %d %b')}}</strong>, then the 2/4/7/10 working-day cadence.<br>
       <span class="muted" style="margin-top:4px;display:inline-block">Skipped: {{sent_result.skipped_duplicate}} already in your pipeline · {{sent_result.skipped_suppressed}} suppressed · {{sent_result.skipped_self}} your own address · {{sent_result.skipped_invalid}} unparseable.</span></span>
   </div>
@@ -248,6 +248,7 @@
     <form method="post" action="/leads/import_sent">
       <label>Mailbox to scan</label>
       <select name="mailbox_id" required>
+        {% if mailboxes_all %}<option value="0">All active mailboxes</option>{% endif %}
         {% for mb in mailboxes_all %}
         <option value="{{mb.id}}" {{'selected' if active_mb and active_mb.id==mb.id}}>{{mb.email}}</option>
         {% else %}
