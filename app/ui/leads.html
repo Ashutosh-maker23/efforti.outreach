@@ -52,28 +52,6 @@
   {% endif %}
 {% endif %}
 
-{% if enrich_result %}
-  {% set er = enrich_result %}
-  {% if er.provider == 'fallback-only' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Personalization is OFF — no API key.</strong>
-      First emails will still send, but without the brand-specific intro. Set <code>ANTHROPIC_API_KEY</code> (in your <code>.env</code> locally, or the host's dashboard) so Claude can research and personalize.</span>
-  </div>
-  {% elif er.provider == 'running' %}
-  <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong>Personalization is already running.</strong> A background pre-generate is in progress — let it finish before starting another. Progress shows in the <a href="/activity">Activity</a> feed.</span>
-  </div>
-  {% elif er.provider == 'started' %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">Personalizing {{er.ai}} lead{{'' if er.ai==1 else 's'}} in the background.</strong>
-      {% if er.ai %}Paragraph 1 of each first email is written from that brand's Apollo details (a free domain lookup fills any gaps — no credits). This runs across all of them; watch the <a href="/activity">Activity</a> feed. You can start sending now — anything not yet done is personalized on the fly at send time.{% else %}Nothing pending — every verified/enrolled lead already has its intro. Tick “Regenerate” to rewrite them with the latest personalization.{% endif %}</span>
-  </div>
-  {% endif %}
-{% endif %}
-
 {% if pull_result %}
 {% set ok = pull_result.imported > 0 %}
 {% set tone = 'var(--ok)' if ok else 'var(--warn)' %}
@@ -263,17 +241,6 @@
       </div>
       <p class="muted" style="margin-top:6px;font-size:12px">Default window covers Jul 23–24. The upper bound is exclusive.</p>
       <div style="margin-top:16px"><button class="btn ghost">Scan Sent folder</button></div>
-    </form>
-  </div>
-
-  <div class="card">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg>Personalize first emails</h2>
-    <form method="post" action="/leads/enrich">
-      <p class="muted" style="margin-bottom:4px;line-height:1.55">The <strong style="color:var(--text-2)">first email</strong> is customized to each brand <strong style="color:var(--text-2)">automatically when you send it</strong> — paragraph 1 is a precise, commendable line built <strong style="color:var(--text-2)">strictly from the company's Apollo details</strong> (what they actually do, their scale, years, revenue, reach; a free Apollo domain lookup fills any gaps — no credits), and Claude writes paragraph 2 on <strong style="color:var(--text-2)">why Efforti</strong> fits that brand. This button <strong style="color:var(--text-2)">pre-generates every pending intro in the background</strong> — the whole pool, however large — so a big send is instant. Sending also personalizes on the fly, so this is optional. Follow-ups stay as written.</p>
-      <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin-top:12px">
-        <input type="checkbox" name="refresh" style="width:auto"> Regenerate intros that already exist <span class="muted" style="font-weight:400">— apply the latest personalization to older ones</span>
-      </label>
-      <div style="margin-top:16px"><button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>Pre-generate all intros</button></div>
     </form>
   </div>
 </div>

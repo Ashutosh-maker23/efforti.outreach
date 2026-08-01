@@ -205,35 +205,3 @@ def ensure_personalization(db, lead) -> str:
         log(db, "enrich", f"personalized primary email for {lead.email}")
         db.commit()
     return block
-
-
-def enrich_leads(db, limit: int = 500, refresh: bool = False) -> dict:
-    """Optional batch pre-generate: write the primary-email personalization for
-    verified/enrolled leads, so a large send does the (cheap) Haiku calls up
-    front instead of on the first click. Sending does the same on demand, so this
-    is an accelerator, not a required step.
-
-    refresh=False (default): only leads that don't have an intro yet.
-    refresh=True: RE-generate leads that already have one too — clears the cached
-    intro first so it's rewritten with the current prompt. Use this after the
-    personalization prompt/logic changes, to fix intros produced by an older
-    version (e.g. the name-guessing bug) without hand-editing each lead."""
-    stats = {"provider": "none", "enriched": 0, "fallback": 0,
-             "refresh": refresh}
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        stats["provider"] = "fallback-only"
-        return stats
-    stats["provider"] = "anthropic"
-
-    q = db.query(Lead).filter(Lead.status.in_(["verified", "enrolled"]))
-    if not refresh:
-        q = q.filter((Lead.intro == "") | (Lead.intro.is_(None)))
-    for lead in q.limit(limit).all():
-        if refresh:
-            lead.intro = ""                 # drop the stale cache -> regenerate
-        if ensure_personalization(db, lead):
-            stats["enriched"] += 1
-        else:
-            stats["fallback"] += 1
-    log(db, "enrich", f"Primary-email personalization ({stats['provider']}): {stats}")
-    return stats

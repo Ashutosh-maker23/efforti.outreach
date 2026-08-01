@@ -272,6 +272,9 @@
       <a href="/mailboxes" class="{{'on' if active_nav=='mail'}}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>
         Mailboxes</a>
+      <a href="/replies" class="{{'on' if active_nav=='replies'}}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+        Replies <span class="count">{{nav_counts.replies}}</span></a>
       <a href="/analytics" class="{{'on' if active_nav=='analytics'}}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg>
         Analytics</a>

@@ -3,7 +3,6 @@ import base64
 import os
 import random
 import re
-import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -29,9 +28,11 @@ from .apollo import (COMPANY_TRAITS, DEFAULT_KEYWORDS, INDUSTRY_OPTIONS,
                      industry_hints, industry_tags, preview_apollo,
                      pull_apollo, trait_hints, trait_tags)
 from .emailer import signature_preview_html, verify_credentials
-from .enrich import enrich_leads
 from .importer import import_csv, import_from_sent
 from .research import research_companies
+# NOTE: personalization is generated on demand at send time (enrich.ensure_
+# personalization, called from the scheduler) — there is no bulk pre-generate
+# route, so enrich_leads is intentionally not imported here.
 from .models import (Enrollment, Event, Lead, Mailbox, Message, Reply,
                      SessionLocal, Sequence, SequenceStep, Suppression,
                      get_metric, init_db, log, set_metric, utcnow)
@@ -109,6 +110,7 @@ def ctx(request, db, **kw):
             "leads": db.query(Lead).filter(Lead.status != "off_icp").count(),
             "active": db.query(Enrollment)
                         .filter(Enrollment.status == "active").count(),
+            "replies": db.query(Reply).count(),
         },
     }
     base.update(kw)
@@ -138,8 +140,6 @@ def dashboard(request: Request, polled: int = 0, pollskip: int = 0, saved: int =
         # Manual figures are stored per scope: "" = all mailboxes, else the id.
         scope = str(mb.id) if mb else ""
         recent_q = db.query(Event).order_by(Event.id.desc())
-        # Real inbound replies, captured by the IMAP poller with their content.
-        replies_q = db.query(Reply).order_by(Reply.id.desc())
 
         if mb:
             # Scope everything to this one mailbox's book of business.
@@ -157,7 +157,6 @@ def dashboard(request: Request, polled: int = 0, pollskip: int = 0, saved: int =
                 Message.status == "sent").count()
             mailboxes = [mb]
             recent_q = recent_q.filter(Event.detail.contains(mb.email))
-            replies_q = replies_q.filter(Reply.mailbox_email == mb.email)
         else:
             leads = db.query(Lead).filter(Lead.status != "off_icp").count()
             contacted = db.query(Message.lead_email).filter(
@@ -180,12 +179,31 @@ def dashboard(request: Request, polled: int = 0, pollskip: int = 0, saved: int =
         }
 
         recent = recent_q.limit(12).all()
-        replies = replies_q.limit(8).all()
         return templates.TemplateResponse(request, "dashboard.html", ctx(
             request, db, active_mb=mb, funnel=funnel, sent_total=sent_total,
             mailboxes=mailboxes, sent_today_map=sent_today_counts(db),
-            recent=recent, replies=replies,
+            recent=recent,
             polled=polled, pollskip=pollskip, saved=saved))
+    finally:
+        db.close()
+
+
+@app.get("/replies", response_class=HTMLResponse)
+def replies_page(request: Request, polled: int = 0, pollskip: int = 0):
+    """Every real inbox reply captured by the IMAP poller, on its own page — a
+    reply auto-stops that lead's sequence. Scoped to the active mailbox when one
+    is selected; the 'Check replies & bounces' trigger lives here too."""
+    db = SessionLocal()
+    try:
+        mb = active_mailbox(request, db)
+        q = db.query(Reply).order_by(Reply.id.desc())
+        if mb:
+            q = q.filter(Reply.mailbox_email == mb.email)
+        reply_total = q.count()
+        replies = q.limit(500).all()
+        return templates.TemplateResponse(request, "replies.html", ctx(
+            request, db, active_mb=mb, replies=replies, reply_total=reply_total,
+            polled=polled, pollskip=pollskip))
     finally:
         db.close()
 
@@ -491,7 +509,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                exhausted: int = 0,
                one: str = "", bulk: int = 0, bsent: int = 0,
                bskip: int = 0, bnomb: int = 0, bstep: int = -1,
-               enr: int = 0, provider: str = "", ai: int = 0, fb: int = 0,
+               provider: str = "",
                res: int = 0, companies: int = 0, rleads: int = 0, web: int = 0,
                noweb: int = 0, rfail: int = 0,
                si: int = 0, smb: int = 0, simp: int = 0, smsg: int = 0,
@@ -499,9 +517,6 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                serr: str = ""):
     db = SessionLocal()
     try:
-        enrich_result = None
-        if enr:
-            enrich_result = {"provider": provider, "ai": ai, "fallback": fb}
         # Sent-folder import result (Post/Redirect/Get from /leads/import_sent).
         sent_result = None
         if si:
@@ -541,7 +556,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
         return templates.TemplateResponse(request, "leads.html", _leads_ctx(
             request, db, status=status, due=due, timing=timing, page=page,
             per_page=per_page, pull_result=pull_result,
-            send_feedback=send_feedback, enrich_result=enrich_result,
+            send_feedback=send_feedback,
             research_result=research_result, sent_result=sent_result))
     finally:
         db.close()
@@ -715,55 +730,6 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
             status_code=303)
     finally:
         db.close()
-
-
-_enrich_lock = threading.Lock()          # one bulk pre-generate run at a time
-
-
-def _enrich_pool_worker(refresh: bool):
-    """Pre-generate the Apollo-grounded personalization for the WHOLE pending
-    first-email pool, off the request thread — thousands of Haiku calls would
-    otherwise time out the HTTP request. Each lead: free Apollo domain backfill
-    (if it lacks brand facts) -> paragraph 1 from those facts -> cached on the
-    lead. One run at a time; a second trigger while active is a no-op."""
-    if not _enrich_lock.acquire(blocking=False):
-        return
-    try:
-        db = SessionLocal()
-        try:
-            enrich_leads(db, limit=1_000_000, refresh=refresh)   # entire pool
-        finally:
-            db.close()
-    finally:
-        _enrich_lock.release()
-
-
-@app.post("/leads/enrich")
-def enrich(refresh: str = Form("")):
-    """Pre-generate the personalized first-email intro (Apollo-grounded paragraph
-    1) for EVERY verified/enrolled lead that needs one, in the BACKGROUND so a
-    big pool (thousands) never times out. `refresh` on = also rewrite intros that
-    already exist. Sending personalizes on demand too, so this just warms the
-    cache ahead of a bulk send."""
-    do_refresh = (refresh == "on")
-    db = SessionLocal()
-    try:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            return RedirectResponse(
-                "/leads?enr=1&provider=fallback-only&ai=0&fb=0", status_code=303)
-        q = db.query(Lead).filter(Lead.status.in_(["verified", "enrolled"]))
-        if not do_refresh:
-            q = q.filter((Lead.intro == "") | (Lead.intro.is_(None)))
-        pending = q.count()
-    finally:
-        db.close()
-    already_running = _enrich_lock.locked()
-    if not already_running and pending:
-        threading.Thread(target=_enrich_pool_worker, args=(do_refresh,),
-                         daemon=True).start()
-    state = "running" if already_running else "started"
-    return RedirectResponse(
-        f"/leads?enr=1&provider={state}&ai={pending}&fb=0", status_code=303)
 
 
 @app.post("/leads/research")
@@ -1195,4 +1161,4 @@ def trigger_poll():
     """Manually check every mailbox for replies and bounces (live mode only)."""
     r = poll_now()
     flag = "polled" if r.get("polled") else "pollskip"
-    return RedirectResponse(f"/?{flag}=1", status_code=303)
+    return RedirectResponse(f"/replies?{flag}=1", status_code=303)
