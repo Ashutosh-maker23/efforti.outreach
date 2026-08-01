@@ -318,9 +318,128 @@ def _usable_email(email: str) -> bool:
     return bool(email) and not any(m in email.lower() for m in LOCKED_EMAIL_MARKERS)
 
 
+def _org_signals(org: dict) -> str:
+    """A compact, factual 'Signals' line from the Apollo org object — the concrete
+    anchors (founded year, headcount, revenue/funding, retail footprint, focus
+    keywords) the personalizer needs to praise something specific and TRUE about
+    the company instead of a generic line. Only fields Apollo actually returned
+    are included; nothing is guessed.
+
+    ZERO extra credits — cardinal rule: `org` is the `organization` object ALREADY
+    bundled inside the person reveal we've already paid one credit for (see
+    _bulk_enrich / _enrich_person). This function only READS more fields off that
+    same dict — it makes NO Apollo request. Never add an `organizations/enrich`
+    (or any network) call here to backfill a missing field: a blank field must
+    simply be omitted, never fetched. A missing signal costs a weaker sentence;
+    an API call here would cost a credit on every single lead."""
+    bits = []
+    if org.get("founded_year"):
+        bits.append(f"founded {org['founded_year']}")
+    if org.get("estimated_num_employees"):
+        bits.append(f"~{org['estimated_num_employees']} employees")
+    rev = org.get("annual_revenue_printed") or org.get("organization_revenue_printed")
+    if rev:
+        bits.append(f"~{rev} annual revenue")
+    if org.get("total_funding_printed"):
+        bits.append(f"{org['total_funding_printed']} raised")
+    if org.get("retail_location_count"):
+        bits.append(f"{org['retail_location_count']} retail locations")
+    kws = [k for k in (org.get("keywords") or [])[:6] if k]
+    if kws:
+        bits.append("focus: " + ", ".join(kws))
+    return "; ".join(bits)
+
+
+def _org_to_desc(org: dict) -> str:
+    """The stored company_desc from an Apollo org object: the short description
+    plus a factual Signals line, so personalization can anchor on a concrete,
+    checkable detail (see enrich.py)."""
+    desc = (org.get("short_description", "") or "").strip()
+    signals = _org_signals(org)
+    return (desc + (("\n\nSignals: " + signals) if signals else ""))[:900]
+
+
+# Apollo's ORGANIZATION enrichment (lookup a company by domain). This is the
+# SEARCH/ENRICH tier — it is NOT a person reveal (people/match, people/bulk_match
+# are the only calls that spend credits), so it costs ZERO Apollo credits. Set
+# APOLLO_ORG_LOOKUP=off to disable it entirely.
+ORG_ENRICH_URL = "https://api.apollo.io/api/v1/organizations/enrich"
+_ORG_CACHE: dict = {}                  # domain -> Lead-shaped fields (per process)
+
+
+def enrich_org_by_domain(domain: str) -> dict:
+    """Look up a company's brand details by DOMAIN, free (organization enrichment,
+    no person reveal -> ZERO credits). Returns our Lead-shaped fields (company,
+    company_desc with Signals, industry, company_size, company_domain) or {} on
+    any miss/error. Cached per domain for the process, so N leads at one company
+    cost at most one lookup. Honours APOLLO_ORG_LOOKUP=off and a missing API key
+    by returning {} (the caller then just personalizes on whatever it already has)."""
+    domain = normalize_domain(domain or "")
+    if not domain:
+        return {}
+    if domain in _ORG_CACHE:
+        return _ORG_CACHE[domain]
+    fields: dict = {}
+    if (os.environ.get("APOLLO_ORG_LOOKUP", "on").lower() != "off"
+            and os.environ.get("APOLLO_API_KEY")):
+        for attempt in range(2):
+            try:
+                r = requests.get(ORG_ENRICH_URL, headers=_headers(),
+                                 params={"domain": domain}, timeout=20)
+                if r.status_code == 429:           # rate limited — back off once
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                if r.status_code == 200:
+                    org = r.json().get("organization") or {}
+                    if org:
+                        fields = {
+                            "company": org.get("name", "") or "",
+                            "company_domain": org.get("primary_domain", "") or domain,
+                            "company_size": str(org.get("estimated_num_employees", "") or ""),
+                            "industry": org.get("industry", "") or "",
+                            "company_desc": _org_to_desc(org),
+                        }
+                break
+            except Exception:
+                break
+    _ORG_CACHE[domain] = fields
+    return fields
+
+
+def backfill_company_facts(lead) -> bool:
+    """Fill in a lead's MISSING company facts from the free Apollo domain lookup
+    (enrich_org_by_domain — ZERO credits) so personalization has real brand
+    detail to work from. Used for leads that arrived without it: recovered from
+    the Sent folder, or a bare CSV. No-op if the lead already has a description.
+    Mutates the lead in place and returns True if anything was filled; the CALLER
+    commits. Best-effort — any miss leaves the lead unchanged and it still sends."""
+    if (getattr(lead, "company_desc", "") or "").strip():
+        return False                    # already has brand facts — nothing to do
+    domain = (getattr(lead, "company_domain", "") or "").strip()
+    if not domain and getattr(lead, "email", "") and "@" in lead.email:
+        domain = lead.email.split("@", 1)[1]
+    facts = enrich_org_by_domain(domain)
+    if not facts:
+        return False
+    if not (lead.company or "").strip():
+        lead.company = facts.get("company", "") or lead.company
+    if not (lead.company_domain or "").strip():
+        lead.company_domain = facts.get("company_domain", "") or lead.company_domain
+    if not (lead.company_size or "").strip():
+        lead.company_size = facts.get("company_size", "") or lead.company_size
+    if not (lead.industry or "").strip():
+        lead.industry = facts.get("industry", "") or lead.industry
+    if facts.get("company_desc"):
+        lead.company_desc = facts["company_desc"]
+    return True
+
+
 def _person_to_fields(p: dict) -> dict:
     """Map an ENRICHED person object (from people/match) to our Lead fields."""
     org = p.get("organization") or {}
+    # Store the description plus a factual Signals line so personalization can
+    # anchor the appreciation on a concrete, checkable detail (see enrich.py).
+    company_desc = _org_to_desc(org)
     return {
         "first_name": p.get("first_name", "") or "",
         "last_name": p.get("last_name", "") or "",
@@ -329,7 +448,7 @@ def _person_to_fields(p: dict) -> dict:
         "company_domain": org.get("primary_domain", "") or org.get("website_url", "") or "",
         "company_size": str(org.get("estimated_num_employees", "") or ""),
         "industry": org.get("industry", "") or "",
-        "company_desc": (org.get("short_description", "") or "")[:600],
+        "company_desc": company_desc,
         "apollo_id": p.get("id", "") or "",
         "email": p.get("email", "") or "",
     }

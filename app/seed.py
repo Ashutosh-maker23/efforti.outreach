@@ -18,11 +18,13 @@ no web search. It expands to two paragraphs after the greeting, or to nothing wh
 there's no API key — so the email reads cleanly either way. Follow-ups stay static.
 The brand blurb under every email is set once in emailer.BRAND_BLURB — not here.
 """
-from .models import Sequence, SequenceStep
+from datetime import datetime
+
+from .models import Enrollment, Sequence, SequenceStep, log
 
 # Bump this name whenever the canonical copy changes so a fresh version seeds
 # cleanly and becomes the single active default (older ones are retired below).
-SEQUENCE_NAME = "Efforti CEO cold sequence v4"
+SEQUENCE_NAME = "Efforti CEO cold sequence v5"
 
 # ── Email 1 · Day 0 · opens the thread ──────────────────────────────────────
 STEP_0_SUBJECT = "who's blocked at {{company}} right now?"
@@ -39,7 +41,7 @@ Worth 20 minutes this week?
 
 P.S. Prefer to poke at it yourself first? agents.efforti.com. First team live in ~15 minutes, no integrations."""
 
-# ── Email 2 · Day 3 · reply in email 1's thread (blank subject) ─────────────
+# ── Email 2 · Working day 2 · reply in email 1's thread (blank subject) ─────
 STEP_1_BODY = """Hi {{first_name}},
 
 A manager using Efforti told us: "I haven't run a status meeting in weeks, and I've never had a clearer picture of my team."
@@ -50,7 +52,7 @@ Setup took 15 minutes. No Jira cleanup, no new tool for the team to learn.
 
 Want to see it on your own team's rhythm? I could do a quick 20 minutes this week or next."""
 
-# ── Email 3 · Day 7 · opens a NEW thread ────────────────────────────────────
+# ── Email 3 · Working day 4 · opens a NEW thread ────────────────────────────
 STEP_2_SUBJECT = "12.5 hours"
 # Manager alternates: "the standup invoice" · "15 × 10 × 5"
 STEP_2_BODY = """Hi {{first_name}},
@@ -63,7 +65,7 @@ That's ~10 hours back per team, every week. Across your teams at {{company}}, yo
 
 Should I send over a two-week pilot plan? Zero cost, no integration, and you keep your numbers either way."""
 
-# ── Email 4 · Day 12 · reply in email 3's thread (blank subject) ────────────
+# ── Email 4 · Working day 7 · reply in email 3's thread (blank subject) ─────
 STEP_3_BODY = """Hi {{first_name}},
 
 Last thought from me on this: the most expensive thing in delivery is rarely the work. It's the wait. Blockers sit for days because raising them means interrupting someone senior, and by the time they surface in a Friday review, the sprint has already slipped.
@@ -74,7 +76,7 @@ We hold our pilots to a measurable bar: at least one blocker caught early in two
 
 20 minutes to see your team's version of that radar?"""
 
-# ── Email 5 · Day 16 · opens the final break-up thread ──────────────────────
+# ── Email 5 · Working day 10 · opens the final break-up thread ──────────────
 STEP_4_SUBJECT = "closing the loop"
 # Manager alternates: "last one from me" · "before I go"
 STEP_4_BODY = """Hi {{first_name}},
@@ -92,17 +94,20 @@ Thanks for reading, and good luck with the quarter."""
 
 def _steps_for(seq_id):
     """The 5 manager steps for a given sequence id. Waits are the gaps between
-    touches (0, 3, 4, 5, 4) → Days 0, 3, 7, 12, 16."""
+    touches, counted in WORKING days (Mon-Fri) — the scheduler advances
+    next_send_at with add_business_days, so weekends never count toward a gap
+    and no touch lands on a weekend. Gaps (0, 2, 2, 3, 3) put the follow-ups on
+    working days 2, 4, 7 and 10, keeping the whole run inside the week."""
     return [
         SequenceStep(sequence_id=seq_id, step_index=0, wait_days=0,
                      subject=STEP_0_SUBJECT, body=STEP_0_BODY),
-        SequenceStep(sequence_id=seq_id, step_index=1, wait_days=3,
+        SequenceStep(sequence_id=seq_id, step_index=1, wait_days=2,
                      subject="", body=STEP_1_BODY),
-        SequenceStep(sequence_id=seq_id, step_index=2, wait_days=4,
+        SequenceStep(sequence_id=seq_id, step_index=2, wait_days=2,
                      subject=STEP_2_SUBJECT, body=STEP_2_BODY),
-        SequenceStep(sequence_id=seq_id, step_index=3, wait_days=5,
+        SequenceStep(sequence_id=seq_id, step_index=3, wait_days=3,
                      subject="", body=STEP_3_BODY),
-        SequenceStep(sequence_id=seq_id, step_index=4, wait_days=4,
+        SequenceStep(sequence_id=seq_id, step_index=4, wait_days=3,
                      subject=STEP_4_SUBJECT, body=STEP_4_BODY),
     ]
 
@@ -136,4 +141,64 @@ def seed_default_sequence(db):
             db.delete(old)
         db.flush()
     db.add_all(_steps_for(seq.id))
+    db.commit()
+
+
+# ── Cutover to the working-day cadence ──────────────────────────────────────
+# The Monday the new Mon-Fri cadence begins. No in-flight follow-up may come due
+# before this day (or on a weekend) — everything earlier is pulled onto it.
+REANCHOR_AT = datetime(2026, 8, 3, 0, 0, 0)   # Mon 2026-08-03, 00:00 UTC
+
+
+def reanchor_inflight_to_monday(db):
+    """Cutover fix: guarantee no in-flight follow-up comes due before the
+    working-day cadence starts (Mon 2026-08-03) or on a weekend.
+
+    Old leads were scheduled under the previous calendar-day timing (Days
+    3/7/12/16), so a lead's next follow-up can sit on a Saturday/Sunday or on a
+    date that's already passed — e.g. a first email sent Jul 30 put follow-up 1
+    on Aug 2, a Sunday, which must never be sendable. For every active,
+    mid-sequence enrollment (opener sent, sequence not finished) whose next
+    touch is unscheduled, falls before the cutover Monday, or lands on a
+    weekend, we snap next_send_at to that Monday. From there the seeded
+    working-day gaps (2, 2, 3, 3) carry it forward exactly like a fresh lead, so
+    the whole book converges on the same 2/4/7/10 pattern. Example for a lead
+    resuming at follow-up 1: fu1 Mon Aug 3 -> fu2 Wed Aug 5 -> fu3 Mon Aug 10 ->
+    fu4 Thu Aug 13.
+
+    A follow-up already sitting on a valid weekday from the Monday onward is
+    left alone. The pass is idempotent and cheap, so it runs on EVERY boot: once
+    the legacy dates are corrected it becomes a no-op (new sends always land on
+    a weekday via add_business_days), so it self-expires with no marker — which
+    also means a lead enrolled at any point still gets fixed, unlike a run-once
+    guard that could miss leads created after it fired.
+
+    Scope: only status=='active' enrollments past the opener (current_step >= 1)
+    and not finished. Replied/bounced/unsubscribed/halted leads are never
+    'active', so they're untouched. First-email-pending leads (current_step 0)
+    need nothing here — the opener is never gated. Sending is manual, so this
+    only changes when a touch becomes ELIGIBLE; nothing is sent automatically."""
+    steps_by_seq = {}                           # sequence_id -> step count (cached)
+    moved = 0
+    for enr in (db.query(Enrollment)
+                .filter(Enrollment.status == "active").all()):
+        n = steps_by_seq.get(enr.sequence_id)
+        if n is None:
+            seq = db.query(Sequence).get(enr.sequence_id)
+            n = len(seq.steps) if seq else 0
+            steps_by_seq[enr.sequence_id] = n
+        if not (1 <= enr.current_step < (n or 0)):
+            continue                            # opener-pending or finished
+        nsa = enr.next_send_at
+        # Bad = unscheduled, due before the cutover Monday, or on a weekend.
+        if nsa is not None and nsa >= REANCHOR_AT and nsa.weekday() < 5:
+            continue                            # already a valid weekday >= Monday
+        enr.next_send_at = REANCHOR_AT
+        moved += 1
+
+    if moved:
+        log(db, "sequence",
+            f"Cutover: moved {moved} in-flight follow-up(s) onto "
+            f"{REANCHOR_AT:%Y-%m-%d} — no weekend or pre-Monday sends; the "
+            f"2/4/7/10 working-day spacing resumes from there.")
     db.commit()

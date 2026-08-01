@@ -4,7 +4,7 @@ import os
 import random
 import re
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -29,14 +29,15 @@ from .apollo import (COMPANY_TRAITS, DEFAULT_KEYWORDS, INDUSTRY_OPTIONS,
                      pull_apollo, trait_hints, trait_tags)
 from .emailer import signature_preview_html, verify_credentials
 from .enrich import enrich_leads
-from .importer import import_csv
+from .importer import import_csv, import_from_sent
 from .research import research_companies
 from .models import (Enrollment, Event, Lead, Mailbox, Message, Reply,
                      SessionLocal, Sequence, SequenceStep, Suppression,
                      get_metric, init_db, log, set_metric, utcnow)
 from .scheduler import (poll_inboxes, poll_now, process_due_sends,
                         send_enrollment_step, weekly_counter_decay)
-from .seed import seed_default_sequence
+from .seed import (REANCHOR_AT, reanchor_inflight_to_monday,
+                   seed_default_sequence)
 
 # On sleep-prone hosts (e.g. Render free tier) the background sender can't be
 # trusted to fire on time. MANUAL_SEND_ONLY (default ON) turns off automatic
@@ -51,6 +52,10 @@ async def lifespan(app: FastAPI):
     init_db()
     db = SessionLocal()
     seed_default_sequence(db)
+    # Cutover: keep every in-flight follow-up on a valid weekday >= the Monday
+    # the working-day cadence begins (2026-08-03) — no weekend/pre-Monday sends.
+    # Idempotent, so it corrects legacy dates on each boot and no-ops thereafter.
+    reanchor_inflight_to_monday(db)
     db.close()
     if not MANUAL_SEND_ONLY:
         # Always-on host: let the scheduler auto-send and auto-poll.
@@ -397,11 +402,14 @@ def _leads_ctx(request, db, status="", due=-1, timing="due", page=1,
     scheduled_ids = {lid for lid, s in enr_step.items()
                      if 1 <= s < n_steps and not _due_now(lid)}
 
-    # Step counts reflect what's actually SENDABLE now (day-gap elapsed), so the
-    # "Ready to send" numbers never over-promise; scheduled ones are tallied
-    # separately for the Due filter.
+    # Per-step tallies over the whole filtered set. due_counts[step] = leads
+    # whose next step is sendable NOW; scheduled_counts[step] = leads whose next
+    # (follow-up) step is still gated to a future date. Both are keyed by the
+    # step index (0 = first email, 1.. = follow-ups), so the "Ready to send"
+    # dropdown can show the right per-step number for the active timing view and
+    # a scheduled breakdown can show follow-ups 1..N still waiting.
     due_counts = {}
-    scheduled_count = 0
+    scheduled_counts = {}
     for lid, lstatus in base.with_entities(Lead.id, Lead.status).all():
         if lstatus in STOPPED:
             continue
@@ -411,7 +419,8 @@ def _leads_ctx(request, db, status="", due=-1, timing="due", page=1,
         if _due_now(lid):
             due_counts[step] = due_counts.get(step, 0) + 1
         else:
-            scheduled_count += 1
+            scheduled_counts[step] = scheduled_counts.get(step, 0) + 1
+    scheduled_count = sum(scheduled_counts.values())
 
     # When a step filter is active, narrow at the DB level so pagination walks
     # every match across all pages — not just whatever landed on this page.
@@ -454,7 +463,8 @@ def _leads_ctx(request, db, status="", due=-1, timing="due", page=1,
     return ctx(request, db, active_mb=mb, leads=leads,
                progress=prog, total_steps=n_steps,
                step_labels=[_step_label(i, short=True) for i in range(n_steps)],
-               due_counts=due_counts, due_filter=due,
+               due_counts=due_counts, scheduled_counts=scheduled_counts,
+               due_filter=due,
                timing_filter=timing, scheduled_count=scheduled_count,
                status_filter=status,
                page=page, per_page=per_page, total_pages=total_pages,
@@ -595,6 +605,35 @@ async def leads_import(request: Request, file: UploadFile = File(...),
         db.close()
 
 
+@app.post("/leads/import_sent", response_class=HTMLResponse)
+def leads_import_sent(request: Request, mailbox_id: int = Form(...),
+                      since: str = Form("2026-07-23"),
+                      before: str = Form("2026-07-25")):
+    """Pick up a batch that was emailed OUTSIDE the app: scan the chosen
+    mailbox's Sent folder for the date window, create a lead per recipient with
+    the opener recorded as already sent, and enroll each at follow-up 1 due on
+    the cutover Monday (REANCHOR_AT). Nothing is sent here — the user drives the
+    follow-up from the Leads page. `before` is the exclusive upper bound, so the
+    default window (2026-07-23 → 2026-07-25) covers Jul 23 and 24."""
+    db = SessionLocal()
+    try:
+        mb = db.query(Mailbox).get(mailbox_id)
+        if not mb:
+            return templates.TemplateResponse(request, "leads.html", _leads_ctx(
+                request, db, sent_result={"error": "no_mailbox"}))
+        try:
+            since_imap = datetime.strptime(since, "%Y-%m-%d").strftime("%d-%b-%Y")
+            before_imap = datetime.strptime(before, "%Y-%m-%d").strftime("%d-%b-%Y")
+        except ValueError:
+            return templates.TemplateResponse(request, "leads.html", _leads_ctx(
+                request, db, sent_result={"error": "bad_dates"}))
+        result = import_from_sent(db, mb, since_imap, before_imap, REANCHOR_AT)
+        return templates.TemplateResponse(request, "leads.html", _leads_ctx(
+            request, db, sent_result=result))
+    finally:
+        db.close()
+
+
 @app.post("/leads/apollo_pull")
 def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
                 industries: str = Form(""), traits: str = Form(""),
@@ -630,11 +669,13 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
 
 
 @app.post("/leads/enrich")
-def enrich(limit: int = Form(500)):
-    """Generate an AI-written personalized opener for each verified lead."""
+def enrich(limit: int = Form(500), refresh: str = Form("")):
+    """Generate an AI-written personalized opener for each verified lead. With
+    `refresh` on, also rewrite intros that already exist (applies the latest
+    personalization prompt to leads generated by an older version)."""
     db = SessionLocal()
     try:
-        s = enrich_leads(db, limit=limit)
+        s = enrich_leads(db, limit=limit, refresh=(refresh == "on"))
         return RedirectResponse(
             f"/leads?enr=1&provider={s['provider']}&ai={s['enriched']}"
             f"&fb={s['fallback']}", status_code=303)
@@ -815,13 +856,15 @@ def sequences_page(request: Request):
 
 @app.post("/sequences/followup_gap")
 def set_followup_gap(days: int = Form(...)):
-    """Set the gap (in days) between every follow-up touch across all sequences."""
+    """Set the gap (in working days, Mon-Fri) between every follow-up touch
+    across all sequences. The scheduler counts these in business days, so
+    weekends are skipped and no touch lands on a weekend."""
     db = SessionLocal()
     try:
         days = max(1, min(30, days))
         for step in db.query(SequenceStep).filter(SequenceStep.step_index > 0).all():
             step.wait_days = days
-        log(db, "sequence", f"Follow-up cadence set to every {days} days")
+        log(db, "sequence", f"Follow-up cadence set to every {days} working days")
         db.commit()
         return RedirectResponse("/sequences", status_code=303)
     finally:

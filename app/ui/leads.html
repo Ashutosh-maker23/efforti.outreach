@@ -32,6 +32,26 @@
   {% endif %}
 {% endif %}
 
+{% if sent_result %}
+  {% if sent_result.error %}
+  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong style="color:var(--bad)">Sent-folder import failed.</strong>
+      {% if sent_result.error == 'no_mailbox' %}Pick a mailbox to scan.
+      {% elif sent_result.error == 'bad_dates' %}Dates must be <code>YYYY-MM-DD</code>.
+      {% elif sent_result.error == 'no_sequence' %}No active sequence with a follow-up to enroll into.
+      {% else %}<code>{{sent_result.error}}</code> — check the mailbox's app password / IMAP access.{% endif %}</span>
+  </div>
+  {% else %}
+  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong style="color:var(--ok)">Picked up {{sent_result.imported}} lead{{'' if sent_result.imported==1 else 's'}} from {{sent_result.mailbox}}'s Sent folder</strong> across {{sent_result.messages}} message{{'' if sent_result.messages==1 else 's'}}.
+      Each has its opener marked as sent and <strong>follow-up 1 due {{sent_result.anchor.strftime('%a %d %b')}}</strong>, then the 2/4/7/10 working-day cadence.{% if sent_result.enriched %} Brand details pulled from Apollo for {{sent_result.enriched}} (free lookup, no credits) so follow-ups personalize correctly.{% endif %}<br>
+      <span class="muted" style="margin-top:4px;display:inline-block">Skipped: {{sent_result.skipped_duplicate}} already in your pipeline · {{sent_result.skipped_suppressed}} suppressed · {{sent_result.skipped_self}} your own address · {{sent_result.skipped_invalid}} unparseable.</span></span>
+  </div>
+  {% endif %}
+{% endif %}
+
 {% if enrich_result %}
   {% set er = enrich_result %}
   {% if er.provider == 'fallback-only' %}
@@ -218,11 +238,37 @@
   </div>
 
   <div class="card">
+    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>Pick up an already-sent batch</h2>
+    <p class="muted" style="margin-bottom:12px;font-size:12px;line-height:1.55">Emailed a batch <strong style="color:var(--text-2)">outside the app</strong>? Scan a mailbox's <strong style="color:var(--text-2)">Sent</strong> folder for the dates you sent it. Each recipient is added with its opener marked as already sent and <strong style="color:var(--text-2)">follow-up 1 scheduled for the cutover Monday</strong>, then the 2/4/7/10 working-day cadence. Each brand's real details are pulled from <strong style="color:var(--text-2)">Apollo by domain</strong> (the free lookup — <strong style="color:var(--text-2)">no credits</strong>) so the follow-ups are properly personalized, not “your company”. Nothing is sent now — you send the follow-up from the table below.</p>
+    <form method="post" action="/leads/import_sent">
+      <label>Mailbox to scan</label>
+      <select name="mailbox_id" required>
+        {% for mb in mailboxes_all %}
+        <option value="{{mb.id}}" {{'selected' if active_mb and active_mb.id==mb.id}}>{{mb.email}}</option>
+        {% else %}
+        <option value="" disabled>No mailboxes — add one first</option>
+        {% endfor %}
+      </select>
+      <div style="display:flex;gap:12px;margin-top:12px">
+        <div style="flex:1"><label style="margin-top:0">Sent on/after</label>
+          <input type="date" name="since" value="2026-07-23"></div>
+        <div style="flex:1"><label style="margin-top:0">Up to (exclusive)</label>
+          <input type="date" name="before" value="2026-07-25"></div>
+      </div>
+      <p class="muted" style="margin-top:6px;font-size:12px">Default window covers Jul 23–24. The upper bound is exclusive.</p>
+      <div style="margin-top:16px"><button class="btn ghost">Scan Sent folder</button></div>
+    </form>
+  </div>
+
+  <div class="card">
     <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg>Personalize first emails</h2>
     <form method="post" action="/leads/enrich">
       <input type="hidden" name="limit" value="500">
-      <p class="muted" style="margin-bottom:4px;line-height:1.55">The <strong style="color:var(--text-2)">first email</strong> is customized to each brand <strong style="color:var(--text-2)">automatically when you send it</strong> — paragraph 1 is built from the company's <strong style="color:var(--text-2)">Apollo details</strong>, and Claude writes paragraph 2 on <strong style="color:var(--text-2)">why Efforti</strong> fits that brand. One cheap Claude call, <strong style="color:var(--text-2)">no web research</strong> — fast and light, so you can send at volume. This button just <strong style="color:var(--text-2)">pre-generates</strong> the intros now so a big send is instant. Follow-ups stay as written.</p>
-      <div style="margin-top:18px"><button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>Pre-generate intros</button></div>
+      <p class="muted" style="margin-bottom:4px;line-height:1.55">The <strong style="color:var(--text-2)">first email</strong> is customized to each brand <strong style="color:var(--text-2)">automatically when you send it</strong> — paragraph 1 is a precise, commendable line built <strong style="color:var(--text-2)">strictly from the company's Apollo details</strong> (what they actually do, their scale, years, revenue, reach), and Claude writes paragraph 2 on <strong style="color:var(--text-2)">why Efforti</strong> fits that brand. One cheap Claude call, <strong style="color:var(--text-2)">no web research</strong> — fast and light, so you can send at volume. This button just <strong style="color:var(--text-2)">pre-generates</strong> the intros now so a big send is instant. Follow-ups stay as written.</p>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin-top:12px">
+        <input type="checkbox" name="refresh" style="width:auto"> Regenerate intros that already exist <span class="muted" style="font-weight:400">— apply the latest personalization to older ones</span>
+      </label>
+      <div style="margin-top:16px"><button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>Pre-generate intros</button></div>
     </form>
   </div>
 </div>
@@ -385,11 +431,13 @@ td .btn.sm{white-space:nowrap}
         <option value="all" {{ 'selected' if timing_filter == 'all' }}>All</option>
       </select>
     </div>
-    <div class="ff"><span>Ready to send</span>
+    <div class="ff"><span>{{ 'Scheduled step' if timing_filter == 'upcoming' else 'Ready to send' }}</span>
       <select onchange="setParam('due', this.value)" aria-label="Filter by next step">
         <option value="" {{ 'selected' if due_filter < 0 }}>Any step</option>
         {% for i in range(total_steps) %}
-        <option value="{{i}}" {{ 'selected' if due_filter == i }}>{{ 'First email' if i == 0 else 'Follow-up ' ~ i }} · {{ due_counts.get(i, 0) }}</option>
+        {# Count matches the Due view: scheduled-only, due-now-only, or both. #}
+        {% set c = scheduled_counts.get(i, 0) if timing_filter == 'upcoming' else (due_counts.get(i, 0) if timing_filter == 'due' else due_counts.get(i, 0) + scheduled_counts.get(i, 0)) %}
+        <option value="{{i}}" {{ 'selected' if due_filter == i }}>{{ 'First email' if i == 0 else 'Follow-up ' ~ i }} · {{ c }}</option>
         {% endfor %}
       </select>
     </div>
@@ -404,6 +452,16 @@ td .btn.sm{white-space:nowrap}
     </div>
   </div>
 </div>
+{% if scheduled_count %}
+<div class="muted" style="margin:-4px 0 16px;font-size:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+  <strong style="color:var(--text-2)">{{ scheduled_count }} scheduled follow-up{{ '' if scheduled_count == 1 else 's' }}</strong>
+  <span style="opacity:.7">waiting for their send date —</span>
+  {% for i in range(1, total_steps) %}{% if scheduled_counts.get(i, 0) %}
+  <a href="?timing=upcoming&due={{i}}" style="text-decoration:none"><span style="display:inline-block;padding:2px 9px;border-radius:20px;background:var(--surface-2, rgba(127,127,127,.14));color:var(--text-2)">Follow-up {{i}} · <strong>{{ scheduled_counts.get(i, 0) }}</strong></span></a>
+  {% endif %}{% endfor %}
+</div>
+{% endif %}
 <script>
 // Update a single filter param and preserve the rest (page resets to 1).
 function setParam(k,v){var u=new URL(location.href);

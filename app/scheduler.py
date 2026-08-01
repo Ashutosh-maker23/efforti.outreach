@@ -4,7 +4,9 @@ Safety rails enforced here, in order:
   1. Mailbox active (NO daily send cap — you can send as many as you like; the
      warm-up ramp on the Mailboxes page is advisory guidance only, not enforced)
   2. Lead not suppressed / not replied / not bounced
-  3. Send only inside the lead's local business hours (default 09:00-17:00)
+  3. Send only on weekdays (Mon-Fri) inside the lead's local business hours
+     (default 09:00-17:00) — follow-up gaps are counted in working days too
+     (see add_business_days), so the whole sequence stays inside the week
   4. Random jitter so sends don't fire in bursts
   5. Auto-pause any mailbox whose 7-day bounce rate exceeds the threshold
 """
@@ -105,6 +107,28 @@ def in_business_hours(lead: Lead, now_utc: datetime) -> bool:
     return BUSINESS_START <= local.hour < BUSINESS_END
 
 
+def add_business_days(start: datetime, n: int) -> datetime:
+    """Advance `start` by `n` business days (Mon-Fri), stepping over weekends.
+
+    This is how every follow-up gap is measured. A week has only five working
+    days, so a wait of 2 means "two weekdays from now" — a Saturday/Sunday never
+    counts toward the gap and a touch never comes due on a weekend. With the
+    seeded gaps (2, 2, 3, 3) the follow-ups therefore land on working days
+    2, 4, 7 and 10, keeping the whole sequence inside the Mon-Fri week.
+
+    n <= 0 returns `start` unchanged (the first email has no wait). Time-of-day
+    is preserved; only the date walks forward. The exact send moment is still
+    pinned to the lead's local business hours by in_business_hours — this only
+    decides which DAY a touch becomes due."""
+    d = start
+    remaining = max(0, n)
+    while remaining > 0:
+        d += timedelta(days=1)
+        if d.weekday() < 5:            # count Mon-Fri; Sat/Sun are skipped free
+            remaining -= 1
+    return d
+
+
 def roll_daily_counters(db, mailbox: Mailbox, today: str):
     if mailbox.sent_today_date != today:
         mailbox.sent_today = 0
@@ -182,7 +206,7 @@ def _do_sends(db, now, manual: bool):
                     else lead.status
             else:
                 nxt = steps[enr.current_step]
-                enr.next_send_at = (now + timedelta(days=nxt.wait_days)
+                enr.next_send_at = (add_business_days(now, nxt.wait_days)
                                     + timedelta(minutes=random.randint(
                                         0, JITTER_MAX_MIN)))
         else:
@@ -228,10 +252,11 @@ def send_enrollment_step(db, enr, step_index, cc=None, bcc=None):
         return "done"
     if step_index != enr.current_step:
         return "out_of_order"
-    # Day-gap gate: a follow-up (step >= 1) may only go out once its wait_days
-    # have elapsed (next_send_at). The first email is always allowed. This is the
-    # backstop behind the UI lock — a stale/duplicated form can't jump the gap
-    # and collapse the cadence. Business hours are still ignored for manual sends.
+    # Day-gap gate: a follow-up (step >= 1) may only go out once its working-day
+    # gap has elapsed (next_send_at). The first email is always allowed. This is
+    # the backstop behind the UI lock — a stale/duplicated form can't jump the
+    # gap and collapse the cadence. Business hours are still ignored for manual
+    # sends.
     if step_index >= 1 and enr.next_send_at and now < enr.next_send_at:
         return "too_early"
     roll_daily_counters(db, mailbox, today)   # keep the "sent today" tally fresh
@@ -251,7 +276,8 @@ def send_enrollment_step(db, enr, step_index, cc=None, bcc=None):
         enr.status = "finished"
         lead.status = "finished"
     else:
-        enr.next_send_at = now + timedelta(days=steps[enr.current_step].wait_days)
+        enr.next_send_at = add_business_days(
+            now, steps[enr.current_step].wait_days)
     return "sent"
 
 

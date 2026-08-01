@@ -114,7 +114,7 @@ class SequenceStep(Base):
     id = Column(Integer, primary_key=True)
     sequence_id = Column(Integer, ForeignKey("sequences.id"))
     step_index = Column(Integer, nullable=False)   # 0, 1, 2...
-    wait_days = Column(Integer, default=0)         # days after previous step
+    wait_days = Column(Integer, default=0)         # working days (Mon-Fri) after previous step
     subject = Column(String, default="")           # empty on follow-ups = same thread
     body = Column(Text, nullable=False)            # Jinja2: {{first_name}} etc.
     sequence = relationship("Sequence", back_populates="steps")
