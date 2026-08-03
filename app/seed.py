@@ -1,11 +1,10 @@
 """Seeds the default Efforti cold-email sequence on first boot.
 
-The 5-touch sequence below is the manager-approved copy. Threading is driven by
-each step's Subject (see emailer.build_email):
-  * a step WITH a subject opens a FRESH thread (a new subject line in the inbox)
-  * a step with a BLANK subject is a reply ("Re:") inside the current thread
-So emails 1+2 share a thread, email 3 opens a new one (and email 4 replies to
-it), and email 5 opens the final break-up thread — exactly as designed.
+The 5-touch sequence below is the manager-approved copy. Threading (see
+emailer.build_email): the FIRST email opens the thread and EVERY follow-up
+replies inside it, so the whole sequence is ONE continuous thread per recipient
+(follow-ups 1-4 arrive as "Re:" replies under the opener, never as separate
+emails). Only the first email carries a subject — the follow-ups leave it blank.
 
 Tokens available in every body: {{first_name}}, {{last_name}}, {{company}},
 {{title}}, {{industry}}, {{trigger}}, plus {{research}} for the raw briefing.
@@ -24,7 +23,7 @@ from .models import Enrollment, Sequence, SequenceStep, log
 
 # Bump this name whenever the canonical copy changes so a fresh version seeds
 # cleanly and becomes the single active default (older ones are retired below).
-SEQUENCE_NAME = "Efforti CEO cold sequence v6"
+SEQUENCE_NAME = "Efforti CEO cold sequence v7"
 
 # ── Email 1 · Day 0 · opens the thread ──────────────────────────────────────
 # Subjects on the thread-opening steps (0, 2, 4) carry {{first_name}} so each
@@ -56,9 +55,8 @@ Setup took 15 minutes. No Jira cleanup, no new tool for the team to learn.
 
 Want to see it on your own team's rhythm? I could do a quick 20 minutes this week or next."""
 
-# ── Email 3 · Working day 4 · opens a NEW thread ────────────────────────────
-STEP_2_SUBJECT = "{{first_name}}, 12.5 hours a week at {{company}}"
-# Manager alternates: "the standup invoice" · "15 × 10 × 5"
+# ── Email 3 · Working day 4 · reply in the opener's thread (blank subject) ──
+STEP_2_SUBJECT = ""
 STEP_2_BODY = """Hi {{first_name}},
 
 Quick math on one 10-person team running a daily standup: 15 minutes × 10 people × 5 days = 12.5 hours a week spent reporting work instead of moving it.
@@ -80,9 +78,8 @@ We hold our pilots to a measurable bar: at least one blocker caught early in two
 
 20 minutes to see your team's version of that radar?"""
 
-# ── Email 5 · Working day 10 · opens the final break-up thread ──────────────
-STEP_4_SUBJECT = "closing the loop, {{first_name}}"
-# Manager alternates: "last one from me" · "before I go"
+# ── Email 5 · Working day 10 · reply in the opener's thread (blank subject) ──
+STEP_4_SUBJECT = ""
 STEP_4_BODY = """Hi {{first_name}},
 
 I'll close the loop here. You're busy running {{company}}, and unanswered emails are their own kind of blocker.

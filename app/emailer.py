@@ -191,22 +191,24 @@ def build_email(mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
     if bcc:
         msg["Bcc"] = ", ".join(bcc)
 
-    # Threading is driven by the step's Subject: a step that carries its OWN
-    # subject opens a FRESH thread (new subject line in the inbox); a step with a
-    # blank subject is a reply ("Re:") in the current thread. That's how the
-    # sequence is designed — emails 1+2 share a thread, email 3 opens a new one
-    # (email 4 replies to it), email 5 opens the final thread. Step 0 always
-    # starts a thread, and so does any send that's somehow missing thread state.
+    # Threading: the FIRST email (step 0) opens the thread; EVERY follow-up
+    # (step >= 1) replies INSIDE that same thread — one continuous conversation
+    # per recipient, so follow-ups 1-4 land as "Re:" replies under the opener, not
+    # as separate emails. The thread is anchored to the first email's Message-ID
+    # (stored on the enrollment at step 0) and is NEVER re-anchored by a later
+    # step — so a follow-up can't split off into its own thread even if its step
+    # carries a subject. Only a send genuinely missing thread state opens one.
     starts_thread = (enrollment.current_step == 0
-                     or not enrollment.thread_message_id
-                     or bool(subject))
+                     or not enrollment.thread_message_id)
     if starts_thread:
         thread_subject = subject or enrollment.thread_subject or ""
         msg["Subject"] = thread_subject
         enrollment.thread_message_id = msg_id
         enrollment.thread_subject = thread_subject
     else:
-        # Follow-up: same thread. Re: subject + threading headers.
+        # Follow-up: reply in the opener's thread. "Re:" on the opener's subject +
+        # threading headers pointing at the thread root, so every follow-up groups
+        # under THIS lead's first email — same client, same thread, every time.
         msg["Subject"] = "Re: " + (enrollment.thread_subject or subject)
         msg["In-Reply-To"] = enrollment.thread_message_id
         msg["References"] = enrollment.thread_message_id
