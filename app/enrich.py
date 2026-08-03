@@ -149,14 +149,46 @@ def _prompt(lead: Lead) -> str:
             "\n\nWrite the two paragraphs.")
 
 
+# Fingerprints of the model breaking character — returning a refusal, a request
+# for more facts, or a description of the TASK instead of the two paragraphs. This
+# text must NEVER reach a lead's inbox (it once did: "the facts provided are too
+# thin ... I need: About the company ..."). If any appears, we drop the block and
+# the email sends without the intro rather than shipping meta-commentary.
+_META_MARKERS = (
+    "paragraph 1", "paragraph 2", "two paragraphs", "supplied facts",
+    "the facts provided", "too thin", "provide those details", "once you provide",
+    "i'll write", "i will write", "i need ", "i appreciate", "you've given me",
+    "you have given me", "you provided", "you've provided", "about the company:",
+    "concrete anchor", "signals or context", "could only apply to this company",
+    "grounded entirely", "the rules", "cannot write", "can't write",
+    "unable to write", "no description", "insufficient", "more details",
+    "as an ai", "i'm sorry", "i am sorry",
+)
+
+
+def _looks_like_meta(text: str) -> bool:
+    """True if the model returned a refusal / clarification / task-description
+    instead of the two-paragraph block — anything that must never be sent."""
+    if not text:
+        return False
+    if "**" in text or re.search(r"(?m)^\s*[-*]\s+", text):   # markdown bold/bullets
+        return True
+    low = text.lower()
+    return any(m in low for m in _META_MARKERS)
+
+
 def _clean_block(text: str) -> str:
-    """Normalize the model output to two clean paragraphs of plain text."""
+    """Normalize the model output to two clean paragraphs of plain text — and
+    HARD-REJECT any output that reads like a refusal / meta-response (returns ''),
+    so it can never be cached or sent."""
     text = (text or "").strip()
     if text.startswith('"') and text.endswith('"'):
         text = text[1:-1].strip()
     text = re.sub(r"\n{3,}", "\n\n", text)          # collapse extra blank lines
     if not text or len(text) > 1200:                # empty / runaway -> drop
-        return "" if not text else text[:1200].rstrip()
+        text = "" if not text else text[:1200].rstrip()
+    if _looks_like_meta(text):                      # broke character -> drop entirely
+        return ""
     return text
 
 
@@ -178,7 +210,16 @@ def ensure_personalization(db, lead) -> str:
     with no API key it returns '' and the email sends without the block."""
     cached = (getattr(lead, "intro", "") or "").strip()
     if cached:
-        return cached
+        if not _looks_like_meta(cached):
+            return cached
+        # A previously-cached refusal/meta block (from before this guard) — drop
+        # it and regenerate, so a bad intro already on a lead self-heals instead
+        # of being re-sent.
+        lead.intro = ""
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return ""
     try:
@@ -189,6 +230,13 @@ def ensure_personalization(db, lead) -> str:
         from .apollo import backfill_company_facts
         if backfill_company_facts(lead):
             db.commit()
+        # Thin-facts guard: with no real company description there is nothing to
+        # ground paragraph 1 on, and a thin prompt is exactly what makes the model
+        # break character and return a refusal. Skip cleanly — the email sends
+        # perfectly well without the intro (greeting + pitch).
+        if (not (getattr(lead, "company_desc", "") or "").strip()
+                and not (getattr(lead, "company_research", "") or "").strip()):
+            return ""
         import anthropic
         client = anthropic.Anthropic()
         block = generate_personalization(client, lead)   # Haiku, from Apollo facts
