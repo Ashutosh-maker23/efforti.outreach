@@ -145,10 +145,75 @@ STALE_TITLE_RE = re.compile(
     r"\b(former|retired|emeritus|fractional)\b|\bex[- ]", re.I)
 NON_ROLE_START_RE = re.compile(r"^\s*(advisor|adviser|board|mentor)\b", re.I)
 
-# The primary buyer roles (CEO/Founder/CoS per the ICP) get a small bump so
-# they outrank the supporting DMU (CFO/COO/CPO) at equal company fit.
-BUYER_TITLE_RE = re.compile(
-    r"\b(ceo|chief executive|founder|co-founder|owner|chief of staff)\b", re.I)
+# --- POC title tiering ------------------------------------------------------
+# The title is the single strongest fit signal we have. Apollo's seniority filter
+# is loose — it leaks re-titled ICs and the "random managers" that keep showing
+# up — so the title drives a LARGE score swing (not the old flat +5), which is
+# what lets the leads list float the genuinely-right decision-makers to the top
+# and sink the noise to the bottom:
+#   +  CEO / Founder / Owner / President / Chief of Staff  (the economic buyer)
+#   +  COO / CFO / CPO                                     (the core supporting DMU)
+#   ~  other C-suite (CTO / CMO / CRO / CIO / ...)         (senior, off-core)
+#   −  VP / Head of / Director                            (senior, not the buyer)
+#   −− Manager / IC / support                             (the noise we rank last)
+# The regexes are checked most-senior-first and short-circuited, so a
+# "Chief Product Officer" scores as CPO and never trips the "officer"/manager
+# rule below it.
+#
+# Tier 1 — economic buyer / visibility champion. 'president' carries a
+# negative-lookbehind so "Vice President" falls through to the VP tier instead.
+_T1_RE = re.compile(
+    r"chief of staff"
+    r"|chief executive"
+    r"|\bceo\b"
+    r"|\bfounder\b|co[-\s]?founder|cofounder"
+    r"|\bowner\b|proprietor"
+    r"|managing director|managing partner"
+    r"|(?<!vice[\s-])\bpresident\b",
+    re.I)
+# Tier 2 — the named supporting DMU: COO / CFO / CPO.
+_T2_RE = re.compile(
+    r"\bcoo\b|chief operating"
+    r"|\bcfo\b|chief financial"
+    r"|\bcpo\b|chief product",
+    re.I)
+# Tier 3 — any other C-suite (CTO/CMO/CRO/CIO/CISO/CHRO/CDO/...): senior but not
+# one of the target buyers. Matches a bare C_O abbreviation or "Chief ... Officer".
+_T3_RE = re.compile(r"\bc[a-z]?[a-z]o\b|chief\b.*\bofficer\b", re.I)
+# Tier 4 — VP / Head of / Director: senior, but off the ICP's buyer set.
+_VP_RE = re.compile(
+    r"\bvp\b|\bsvp\b|\bevp\b|vice[\s-]president"
+    r"|head of\b|\bhead\b|director|\bdir\b",
+    re.I)
+# Tier 5 — Manager / individual-contributor / support: the "random manager"
+# noise the ICP scoring is meant to rank last.
+_IC_RE = re.compile(
+    r"manager|\bmgr\b|coordinator|specialist|analyst|associate|assistant"
+    r"|representative|\brep\b|generalist|executive|officer|consultant"
+    r"|supervisor|team[\s-]lead|\blead\b|engineer|developer|designer|architect"
+    r"|scientist|recruiter|administrator|accountant|controller|strategist"
+    r"|planner|advocate|evangelist|technician|clerk|intern|trainee|\bagent\b",
+    re.I)
+
+
+def title_tier(title: str) -> tuple:
+    """Rank a POC's title against Efforti's decision-maker ICP: returns
+    (score_delta, reason). See the tier comments above. An empty title is a mild
+    unknown, not a hard penalty (Sent-folder imports often lack one)."""
+    t = (title or "").strip()
+    if not t:
+        return -6, "title unknown"
+    if _T1_RE.search(t):
+        return 20, "primary buyer role (CEO/Founder/CoS)"
+    if _T2_RE.search(t):
+        return 14, "core DMU (COO/CFO/CPO)"
+    if _T3_RE.search(t):
+        return 4, "other C-suite"
+    if _VP_RE.search(t):
+        return -12, "VP/Director - off-ICP seniority"
+    if _IC_RE.search(t):
+        return -28, f"manager/IC title - not a target buyer ({t})"
+    return -8, "non-buyer title"
 
 STARTUP_MAX_AGE_YEARS = 12     # founded within this = startup-aged (+)
 OLD_COMPANY_AGE_YEARS = 25     # older than this = established firm (−)
@@ -434,9 +499,11 @@ def score_lead(fields: dict, org: dict, band: tuple,
         score -= 5
         reasons.append("headcount unknown")
 
-    if BUYER_TITLE_RE.search(title):
-        score += 5
-        reasons.append("primary buyer role")
+    # POC title tier — the strongest, most differentiating signal (see title_tier):
+    # the target CEO/Founder/COO/CoS/CFO/CPO roles climb, VP/Director/Manager sink.
+    tdelta, treason = title_tier(title)
+    score += tdelta
+    reasons.append(treason)
 
     score = max(0, min(100, score))
     bar = min_score()

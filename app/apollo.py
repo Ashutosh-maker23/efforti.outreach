@@ -486,6 +486,32 @@ def complete_lead(lead) -> bool:
     return changed
 
 
+def rescore_lead(lead) -> bool:
+    """RE-score an already-scored lead against the CURRENT ICP logic (e.g. after a
+    change to the POC title tiering), so the leads list re-ranks on the new score.
+    Uses the free domain lookup (organizations/enrich — ZERO credits, cached per
+    domain) to recover the company signals, then re-runs score_lead on the lead's
+    stored fields. Updates icp_score / icp_reasons / trigger in place and NEVER
+    touches status — a below-bar lead stays where it is, just ranked lower.
+    Mutates the lead; the CALLER commits. Returns True if the score changed.
+    Never raises."""
+    org = _fetch_org(_lead_domain(lead)) or {}
+    icp = score_lead(
+        {"title": lead.title or "",
+         "company_domain": lead.company_domain or "",
+         "email": lead.email or "",
+         "industry": lead.industry or org.get("industry", ""),
+         "company_desc": lead.company_desc or ""},
+        org, (0, 0))
+    reasons = "; ".join(icp["reasons"])
+    changed = (lead.icp_score != icp["score"]) or (lead.icp_reasons != reasons)
+    lead.icp_score = icp["score"]
+    lead.icp_reasons = reasons
+    if not (lead.trigger or "").strip() and icp.get("trigger"):
+        lead.trigger = icp["trigger"]
+    return changed
+
+
 def _person_to_fields(p: dict) -> dict:
     """Map an ENRICHED person object (from people/match) to our Lead fields."""
     org = p.get("organization") or {}

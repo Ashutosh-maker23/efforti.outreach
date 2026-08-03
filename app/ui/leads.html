@@ -51,6 +51,20 @@
   {% endif %}
 {% endif %}
 
+{% if rescore_result %}
+  {% if rescore_result.state == 'run' %}
+  <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Already re-scoring.</strong> A background ICP re-score is in progress — let it finish, then refresh to see the leads re-rank by the new score.</span>
+  </div>
+  {% else %}
+  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
+    <span>{% if rescore_result.n %}<strong style="color:var(--ok)">Re-scoring {{rescore_result.n}} lead{{'' if rescore_result.n==1 else 's'}} in the background</strong> — re-ranking every lead on the POC-title tiering (CEO/Founder/COO/CoS/CFO/CPO climb, managers sink). Free Apollo lookup, no credits. Refresh in a moment to see the ICP badges and order update.{% else %}<strong style="color:var(--ok)">No leads to re-score.</strong>{% endif %}</span>
+  </div>
+  {% endif %}
+{% endif %}
+
 {% if sent_result %}
   {% if sent_result.error %}
   <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
@@ -264,6 +278,10 @@
     <form method="post" action="/leads/complete" style="margin-top:14px;border-top:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding-top:14px">
       <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Imported leads (and bare CSVs) arrive without a <strong style="color:var(--text-2)">brand name</strong> or an <strong style="color:var(--text-2)">ICP score</strong>. This fills both for every incomplete lead by looking each company up on Apollo <strong style="color:var(--text-2)">by domain</strong> — the free lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
       <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>Complete brand names &amp; ICP scores</button>
+    </form>
+    <form method="post" action="/leads/rescore" style="margin-top:14px;border-top:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding-top:14px">
+      <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Re-score <strong style="color:var(--text-2)">every</strong> lead on the current ICP rules — the <strong style="color:var(--text-2)">POC-title tiering</strong> where CEO/Founder, COO, Chief of Staff, CFO &amp; CPO rank highest and <strong style="color:var(--text-2)">managers / ICs sink to the bottom</strong>. Nothing is hidden or removed — leads only <strong style="color:var(--text-2)">re-rank</strong> by the new score. Free Apollo domain lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
+      <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18M7 12h10m-7 6h4"/></svg>Re-score ICP by POC title</button>
     </form>
   </div>
 </div>

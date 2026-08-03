@@ -508,11 +508,14 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                noweb: int = 0, rfail: int = 0,
                si: int = 0, smb: int = 0, simp: int = 0, smsg: int = 0,
                sdup: int = 0, ssup: int = 0, sslf: int = 0, sinv: int = 0,
-               serr: str = "", cmpl: str = "", cn: int = 0):
+               serr: str = "", cmpl: str = "", cn: int = 0,
+               rsc: str = "", rn: int = 0):
     db = SessionLocal()
     try:
         # Brand + ICP completion result (from /leads/complete).
         complete_result = {"state": cmpl, "n": cn} if cmpl else None
+        # ICP re-score result (from /leads/rescore).
+        rescore_result = {"state": rsc, "n": rn} if rsc else None
         # Sent-folder import result (Post/Redirect/Get from /leads/import_sent).
         sent_result = None
         if si:
@@ -553,7 +556,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
             per_page=per_page, pull_result=pull_result,
             send_feedback=send_feedback,
             research_result=research_result, sent_result=sent_result,
-            complete_result=complete_result))
+            complete_result=complete_result, rescore_result=rescore_result))
     finally:
         db.close()
 
@@ -643,6 +646,7 @@ def _incomplete_leads_filter():
 
 
 _complete_lock = threading.Lock()        # one completion run at a time
+_rescore_lock = threading.Lock()         # one re-score run at a time
 
 
 def _complete_pool_worker():
@@ -693,6 +697,56 @@ def leads_complete():
         threading.Thread(target=_complete_pool_worker, daemon=True).start()
     state = "run" if running else "start"
     return RedirectResponse(f"/leads?cmpl={state}&cn={pending}", status_code=303)
+
+
+def _rescore_worker():
+    """Re-score EVERY lead against the CURRENT ICP logic (the POC-title tiering),
+    off the request thread, via the free Apollo domain lookup (organizations/enrich
+    — ZERO credits, cached per domain). Status is never changed: leads only move
+    up or down the ranking, so a wrong-title lead sinks to the bottom of the list
+    rather than leaving it. Committed per lead, one run at a time."""
+    if not _rescore_lock.acquire(blocking=False):
+        return
+    try:
+        db = SessionLocal()
+        try:
+            from .apollo import rescore_lead
+            done = 0
+            for lead in db.query(Lead).all():
+                try:
+                    if rescore_lead(lead):
+                        db.commit()
+                        done += 1
+                    else:
+                        db.rollback()
+                except Exception:
+                    db.rollback()
+            log(db, "enrich",
+                f"Re-scored ICP for {done} lead(s) on the updated POC-title "
+                f"tiering (free Apollo domain lookup, no credits)")
+            db.commit()
+        finally:
+            db.close()
+    finally:
+        _rescore_lock.release()
+
+
+@app.post("/leads/rescore")
+def leads_rescore():
+    """Re-score ALL leads with the current ICP logic (the new POC-title tiering),
+    in the BACKGROUND, from the free Apollo domain lookup (no reveal, ZERO
+    credits). Leads keep their status and simply re-rank by the new score, so the
+    right decision-makers float to the top and the 'random managers' sink."""
+    db = SessionLocal()
+    try:
+        total = db.query(Lead).count()
+    finally:
+        db.close()
+    running = _rescore_lock.locked()
+    if not running and total:
+        threading.Thread(target=_rescore_worker, daemon=True).start()
+    state = "run" if running else "start"
+    return RedirectResponse(f"/leads?rsc={state}&rn={total}", status_code=303)
 
 
 @app.get("/leads/import_sent")
