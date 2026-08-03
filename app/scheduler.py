@@ -252,12 +252,14 @@ def send_enrollment_step(db, enr, step_index, cc=None, bcc=None):
         return "done"
     if step_index != enr.current_step:
         return "out_of_order"
-    # Day-gap gate: a follow-up (step >= 1) may only go out once its working-day
-    # gap has elapsed (next_send_at). The first email is always allowed. This is
-    # the backstop behind the UI lock — a stale/duplicated form can't jump the
-    # gap and collapse the cadence. Business hours are still ignored for manual
-    # sends.
-    if step_index >= 1 and enr.next_send_at and now < enr.next_send_at:
+    # Day-gap gate: a follow-up (step >= 1) may only go out once its scheduled
+    # DAY has arrived. We compare by date, not exact time — for a manual send the
+    # whole scheduled day is fair game, so a follow-up due "Aug 3" is sendable any
+    # time on Aug 3, not blocked until the minute-of-day its next_send_at happens
+    # to carry. The first email is always allowed. This is the backstop behind the
+    # UI lock; business hours are ignored for manual sends.
+    if (step_index >= 1 and enr.next_send_at
+            and now.date() < enr.next_send_at.date()):
         return "too_early"
     roll_daily_counters(db, mailbox, today)   # keep the "sent today" tally fresh
     step = steps[step_index]

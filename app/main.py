@@ -311,11 +311,12 @@ def _lead_progress(db, leads, now=None):
             else:
                 nxt = cur
                 # First email (step 0) is always sendable. A follow-up is due
-                # only once its wait_days have elapsed — next_send_at is that
-                # moment. A missing next_send_at (legacy row) is treated as due.
+                # once its scheduled DAY has arrived — compared by date, so the
+                # whole day is sendable (manual send: the minute-of-day on
+                # next_send_at doesn't gate it). Missing next_send_at = due.
                 if cur >= 1 and enr is not None:
                     due_at = enr.next_send_at
-                    is_due = due_at is None or due_at <= now
+                    is_due = due_at is None or due_at.date() <= now.date()
                 state = "ready" if is_due else "scheduled"
         prog[l.id] = {
             "sent": done_steps, "next": nxt, "state": state,
@@ -436,11 +437,12 @@ def _leads_ctx(request, db, status="", due=-1, page=1,
 
     # Leads waiting on a not-yet-due follow-up (a small set). Used ONLY to sort
     # them BELOW the ready-to-send leads, so what you can act on now floats to the
-    # top and each follow-up "pops up" the day its gap elapses. Sending stays
-    # manual — this is ordering, not a gate.
+    # top and each follow-up "pops up" the day its gap elapses. Compared by date
+    # (same rule as _lead_progress/the send gate) so a follow-up due today counts
+    # as ready. Sending stays manual — this is ordering, not a gate.
     scheduled_ids = [lid for lid, s in enr_step.items()
                      if 1 <= s < n_steps and enr_due.get(lid) is not None
-                     and enr_due[lid] > now]
+                     and enr_due[lid].date() > now.date()]
 
     # When a step filter is active, narrow at the DB level so pagination walks
     # every match across all pages — not just whatever landed on this page.
