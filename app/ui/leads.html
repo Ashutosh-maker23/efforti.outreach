@@ -396,20 +396,11 @@ td .btn.sm{white-space:nowrap}
 
   <!-- Filters compose: setParam updates ONE query param and keeps the others. -->
   <div class="leadfilters">
-    <div class="ff"><span>Due</span>
-      <select onchange="setParam('timing', this.value)" aria-label="Filter by follow-up timing">
-        <option value="due" {{ 'selected' if timing_filter == 'due' }}>Due now · {{ due_counts.values()|sum }}</option>
-        <option value="upcoming" {{ 'selected' if timing_filter == 'upcoming' }}>Scheduled · {{ scheduled_count }}</option>
-        <option value="all" {{ 'selected' if timing_filter == 'all' }}>All</option>
-      </select>
-    </div>
-    <div class="ff"><span>{{ 'Scheduled step' if timing_filter == 'upcoming' else 'Ready to send' }}</span>
-      <select onchange="setParam('due', this.value)" aria-label="Filter by next step">
-        <option value="" {{ 'selected' if due_filter < 0 }}>Any step</option>
+    <div class="ff"><span>Show</span>
+      <select onchange="setParam('due', this.value)" aria-label="Filter by which email is next">
+        <option value="" {{ 'selected' if due_filter < 0 }}>Every step · {{ step_counts.values()|sum }}</option>
         {% for i in range(total_steps) %}
-        {# Count matches the Due view: scheduled-only, due-now-only, or both. #}
-        {% set c = scheduled_counts.get(i, 0) if timing_filter == 'upcoming' else (due_counts.get(i, 0) if timing_filter == 'due' else due_counts.get(i, 0) + scheduled_counts.get(i, 0)) %}
-        <option value="{{i}}" {{ 'selected' if due_filter == i }}>{{ 'First email' if i == 0 else 'Follow-up ' ~ i }} · {{ c }}</option>
+        <option value="{{i}}" {{ 'selected' if due_filter == i }}>{{ 'First email' if i == 0 else 'Follow-up ' ~ i }} · {{ step_counts.get(i, 0) }}</option>
         {% endfor %}
       </select>
     </div>
@@ -424,16 +415,6 @@ td .btn.sm{white-space:nowrap}
     </div>
   </div>
 </div>
-{% if scheduled_count %}
-<div class="muted" style="margin:-4px 0 16px;font-size:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-  <strong style="color:var(--text-2)">{{ scheduled_count }} scheduled follow-up{{ '' if scheduled_count == 1 else 's' }}</strong>
-  <span style="opacity:.7">waiting for their send date —</span>
-  {% for i in range(1, total_steps) %}{% if scheduled_counts.get(i, 0) %}
-  <a href="?timing=upcoming&due={{i}}" style="text-decoration:none"><span style="display:inline-block;padding:2px 9px;border-radius:20px;background:var(--surface-2, rgba(127,127,127,.14));color:var(--text-2)">Follow-up {{i}} · <strong>{{ scheduled_counts.get(i, 0) }}</strong></span></a>
-  {% endif %}{% endfor %}
-</div>
-{% endif %}
 <script>
 // Update a single filter param and preserve the rest (page resets to 1).
 function setParam(k,v){var u=new URL(location.href);
@@ -455,7 +436,6 @@ function setParam(k,v){var u=new URL(location.href);
 {% set ns = namespace(f='') %}
 {% if status_filter %}{% set ns.f = ns.f ~ '&status=' ~ status_filter %}{% endif %}
 {% if due_filter >= 0 %}{% set ns.f = ns.f ~ '&due=' ~ due_filter %}{% endif %}
-{% if timing_filter and timing_filter != 'due' %}{% set ns.f = ns.f ~ '&timing=' ~ timing_filter %}{% endif %}
 <div class="pager">
   <span class="muted">{% if total_count %}Showing {{page_start}}–{{page_end}} of {{total_count}} leads{% else %}No leads{% endif %}</span>
   {% if total_pages > 1 %}
@@ -490,7 +470,8 @@ function setParam(k,v){var u=new URL(location.href);
     <td>{% if pr.state == 'ready' and pr.next is not none %}
       <input type="checkbox" class="lcb rowcb" value="{{l.id}}" data-step="{{pr.next}}">{% endif %}</td>
     <td><div class="contact-em">{{l.email}}</div>
-      <div class="contact-sub">{{l.first_name}} {{l.last_name}}{% if l.title %} · {{l.title}}{% endif %}</div></td>
+      <div class="contact-sub">{{l.first_name}} {{l.last_name}}{% if l.title %} · {{l.title}}{% endif %}</div>
+      {% if not active_mb and pr.mailbox %}<div class="contact-sub" style="margin-top:3px"><span style="display:inline-block;font-size:10.5px;padding:1px 8px;border-radius:20px;background:var(--surface-2, rgba(127,127,127,.14));color:var(--text-2)">via {{pr.mailbox}}</span></div>{% endif %}</td>
     <td>{{l.company}} <span class="muted">{{l.company_size}}</span>
       {% if l.icp_score is not none and l.icp_score >= 0 %}<span class="icpb {{'hi' if l.icp_score >= 70 else ('mid' if l.icp_score >= 55 else 'lo')}}" title="{{l.icp_reasons}}">ICP {{l.icp_score}}</span>{% endif %}</td>
     <td class="muted" style="max-width:300px;font-size:12.5px">{{ (l.intro or l.trigger)|truncate(120) }}</td>
