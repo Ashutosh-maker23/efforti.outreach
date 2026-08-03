@@ -32,6 +32,25 @@
   {% endif %}
 {% endif %}
 
+{% if complete_result %}
+  {% if complete_result.state == 'noapi' %}
+  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong style="color:var(--bad)">Can't complete details — no Apollo API key.</strong> Set <code>APOLLO_API_KEY</code> so the brand name and ICP score can be looked up (free — no reveal, no credits).</span>
+  </div>
+  {% elif complete_result.state == 'run' %}
+  <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Already completing details.</strong> A background run is in progress — let it finish. Progress shows in the <a href="/activity">Activity</a> feed; refresh to see the brand names and ICP scores fill in.</span>
+  </div>
+  {% else %}
+  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
+    <span>{% if complete_result.n %}<strong style="color:var(--ok)">Completing {{complete_result.n}} lead{{'' if complete_result.n==1 else 's'}} in the background</strong> — looking up each brand name and ICP score by domain (free Apollo lookup, no credits). Refresh in a moment to see the Company column and ICP badges fill in.{% else %}<strong style="color:var(--ok)">Nothing to complete</strong> — every lead already has a brand name and an ICP score.{% endif %}</span>
+  </div>
+  {% endif %}
+{% endif %}
+
 {% if sent_result %}
   {% if sent_result.error %}
   <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
@@ -241,6 +260,10 @@
       </div>
       <p class="muted" style="margin-top:6px;font-size:12px">Default window covers Jul 23–24. The upper bound is exclusive.</p>
       <div style="margin-top:16px"><button class="btn ghost">Scan Sent folder</button></div>
+    </form>
+    <form method="post" action="/leads/complete" style="margin-top:14px;border-top:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding-top:14px">
+      <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Imported leads (and bare CSVs) arrive without a <strong style="color:var(--text-2)">brand name</strong> or an <strong style="color:var(--text-2)">ICP score</strong>. This fills both for every incomplete lead by looking each company up on Apollo <strong style="color:var(--text-2)">by domain</strong> — the free lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
+      <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>Complete brand names &amp; ICP scores</button>
     </form>
   </div>
 </div>

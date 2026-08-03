@@ -24,10 +24,14 @@ from .models import Enrollment, Sequence, SequenceStep, log
 
 # Bump this name whenever the canonical copy changes so a fresh version seeds
 # cleanly and becomes the single active default (older ones are retired below).
-SEQUENCE_NAME = "Efforti CEO cold sequence v5"
+SEQUENCE_NAME = "Efforti CEO cold sequence v6"
 
 # ── Email 1 · Day 0 · opens the thread ──────────────────────────────────────
-STEP_0_SUBJECT = "who's blocked at {{company}} right now?"
+# Subjects on the thread-opening steps (0, 2, 4) carry {{first_name}} so each
+# recipient gets a UNIQUE subject line. Same-brand execs no longer collapse into
+# one Gmail conversation — every person is a clean, separate thread — and a
+# per-recipient subject is also better for deliverability than a mass-identical one.
+STEP_0_SUBJECT = "{{first_name}}, who's blocked at {{company}} right now?"
 # Manager alternates: "the question no dashboard answers" · "9:12 am at {{company}}"
 STEP_0_BODY = """Hi {{first_name}},
 {{personalization}}
@@ -53,7 +57,7 @@ Setup took 15 minutes. No Jira cleanup, no new tool for the team to learn.
 Want to see it on your own team's rhythm? I could do a quick 20 minutes this week or next."""
 
 # ── Email 3 · Working day 4 · opens a NEW thread ────────────────────────────
-STEP_2_SUBJECT = "12.5 hours"
+STEP_2_SUBJECT = "{{first_name}}, 12.5 hours a week at {{company}}"
 # Manager alternates: "the standup invoice" · "15 × 10 × 5"
 STEP_2_BODY = """Hi {{first_name}},
 
@@ -77,7 +81,7 @@ We hold our pilots to a measurable bar: at least one blocker caught early in two
 20 minutes to see your team's version of that radar?"""
 
 # ── Email 5 · Working day 10 · opens the final break-up thread ──────────────
-STEP_4_SUBJECT = "closing the loop"
+STEP_4_SUBJECT = "closing the loop, {{first_name}}"
 # Manager alternates: "last one from me" · "before I go"
 STEP_4_BODY = """Hi {{first_name}},
 

@@ -3,6 +3,7 @@ import base64
 import os
 import random
 import re
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -20,7 +21,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import case, func, or_
+from sqlalchemy import and_, case, func, or_
 
 from .analytics import compute as compute_analytics
 from .apollo import (COMPANY_TRAITS, DEFAULT_KEYWORDS, INDUSTRY_OPTIONS,
@@ -507,9 +508,11 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                noweb: int = 0, rfail: int = 0,
                si: int = 0, smb: int = 0, simp: int = 0, smsg: int = 0,
                sdup: int = 0, ssup: int = 0, sslf: int = 0, sinv: int = 0,
-               serr: str = ""):
+               serr: str = "", cmpl: str = "", cn: int = 0):
     db = SessionLocal()
     try:
+        # Brand + ICP completion result (from /leads/complete).
+        complete_result = {"state": cmpl, "n": cn} if cmpl else None
         # Sent-folder import result (Post/Redirect/Get from /leads/import_sent).
         sent_result = None
         if si:
@@ -549,7 +552,8 @@ def leads_page(request: Request, status: str = "", due: int = -1,
             request, db, status=status, due=due, page=page,
             per_page=per_page, pull_result=pull_result,
             send_feedback=send_feedback,
-            research_result=research_result, sent_result=sent_result))
+            research_result=research_result, sent_result=sent_result,
+            complete_result=complete_result))
     finally:
         db.close()
 
@@ -627,6 +631,68 @@ async def leads_import(request: Request, file: UploadFile = File(...),
             request, db, import_result=result))
     finally:
         db.close()
+
+
+def _incomplete_leads_filter():
+    """Leads missing a brand name OR without an ICP score yet (icp_score < 0).
+    These are the ones a completion pass fills in. off_icp is left out (its own
+    bucket)."""
+    return and_(Lead.status != "off_icp",
+                or_(Lead.company == "", Lead.company.is_(None),
+                    Lead.icp_score < 0))
+
+
+_complete_lock = threading.Lock()        # one completion run at a time
+
+
+def _complete_pool_worker():
+    """Fill the brand name/facts AND the ICP score for every incomplete lead via
+    the free Apollo domain lookup (organizations/enrich — ZERO credits), off the
+    request thread. Cached per domain, committed per lead, one run at a time."""
+    if not _complete_lock.acquire(blocking=False):
+        return
+    try:
+        db = SessionLocal()
+        try:
+            from .apollo import complete_lead
+            done = 0
+            for lead in db.query(Lead).filter(_incomplete_leads_filter()).all():
+                try:
+                    if complete_lead(lead):
+                        db.commit()
+                        done += 1
+                    else:
+                        db.rollback()
+                except Exception:
+                    db.rollback()
+            log(db, "enrich",
+                f"Completed brand name + ICP score for {done} lead(s) "
+                f"(free Apollo domain lookup, no credits)")
+            db.commit()
+        finally:
+            db.close()
+    finally:
+        _complete_lock.release()
+
+
+@app.post("/leads/complete")
+def leads_complete():
+    """Fill in the brand name and ICP score for every lead that's missing them
+    (Sent-folder / bare-CSV leads), in the BACKGROUND, from the free Apollo
+    domain lookup (no reveal, ZERO credits). So the company column and an ICP
+    score show for ALL leads, not only the Apollo-pulled ones."""
+    db = SessionLocal()
+    try:
+        if not os.environ.get("APOLLO_API_KEY"):
+            return RedirectResponse("/leads?cmpl=noapi", status_code=303)
+        pending = db.query(Lead).filter(_incomplete_leads_filter()).count()
+    finally:
+        db.close()
+    running = _complete_lock.locked()
+    if not running and pending:
+        threading.Thread(target=_complete_pool_worker, daemon=True).start()
+    state = "run" if running else "start"
+    return RedirectResponse(f"/leads?cmpl={state}&cn={pending}", status_code=303)
 
 
 @app.get("/leads/import_sent")

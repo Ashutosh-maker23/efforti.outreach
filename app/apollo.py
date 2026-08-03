@@ -364,22 +364,20 @@ def _org_to_desc(org: dict) -> str:
 # are the only calls that spend credits), so it costs ZERO Apollo credits. Set
 # APOLLO_ORG_LOOKUP=off to disable it entirely.
 ORG_ENRICH_URL = "https://api.apollo.io/api/v1/organizations/enrich"
-_ORG_CACHE: dict = {}                  # domain -> Lead-shaped fields (per process)
+_ORG_CACHE: dict = {}                  # domain -> raw Apollo org dict (per process)
 
 
-def enrich_org_by_domain(domain: str) -> dict:
-    """Look up a company's brand details by DOMAIN, free (organization enrichment,
-    no person reveal -> ZERO credits). Returns our Lead-shaped fields (company,
-    company_desc with Signals, industry, company_size, company_domain) or {} on
-    any miss/error. Cached per domain for the process, so N leads at one company
-    cost at most one lookup. Honours APOLLO_ORG_LOOKUP=off and a missing API key
-    by returning {} (the caller then just personalizes on whatever it already has)."""
+def _fetch_org(domain: str) -> dict:
+    """The raw Apollo ORGANIZATION object for a domain, free (organization
+    enrichment, NOT a person reveal -> ZERO credits), cached per domain so N
+    leads at one company cost at most one lookup. Returns {} on any miss/error,
+    when APOLLO_ORG_LOOKUP=off, or with no API key."""
     domain = normalize_domain(domain or "")
     if not domain:
         return {}
     if domain in _ORG_CACHE:
         return _ORG_CACHE[domain]
-    fields: dict = {}
+    org: dict = {}
     if (os.environ.get("APOLLO_ORG_LOOKUP", "on").lower() != "off"
             and os.environ.get("APOLLO_API_KEY")):
         for attempt in range(2):
@@ -391,34 +389,44 @@ def enrich_org_by_domain(domain: str) -> dict:
                     continue
                 if r.status_code == 200:
                     org = r.json().get("organization") or {}
-                    if org:
-                        fields = {
-                            "company": org.get("name", "") or "",
-                            "company_domain": org.get("primary_domain", "") or domain,
-                            "company_size": str(org.get("estimated_num_employees", "") or ""),
-                            "industry": org.get("industry", "") or "",
-                            "company_desc": _org_to_desc(org),
-                        }
                 break
             except Exception:
                 break
-    _ORG_CACHE[domain] = fields
-    return fields
+    _ORG_CACHE[domain] = org
+    return org
+
+
+def enrich_org_by_domain(domain: str) -> dict:
+    """Our Lead-shaped fields (company, company_desc with Signals, industry,
+    company_size, company_domain) from the free domain lookup, or {} on a miss."""
+    org = _fetch_org(domain)
+    if not org:
+        return {}
+    return {
+        "company": org.get("name", "") or "",
+        "company_domain": org.get("primary_domain", "") or normalize_domain(domain),
+        "company_size": str(org.get("estimated_num_employees", "") or ""),
+        "industry": org.get("industry", "") or "",
+        "company_desc": _org_to_desc(org),
+    }
+
+
+def _lead_domain(lead) -> str:
+    domain = (getattr(lead, "company_domain", "") or "").strip()
+    if not domain and getattr(lead, "email", "") and "@" in lead.email:
+        domain = lead.email.split("@", 1)[1]
+    return domain
 
 
 def backfill_company_facts(lead) -> bool:
     """Fill in a lead's MISSING company facts from the free Apollo domain lookup
-    (enrich_org_by_domain — ZERO credits) so personalization has real brand
-    detail to work from. Used for leads that arrived without it: recovered from
-    the Sent folder, or a bare CSV. No-op if the lead already has a description.
-    Mutates the lead in place and returns True if anything was filled; the CALLER
-    commits. Best-effort — any miss leaves the lead unchanged and it still sends."""
+    (ZERO credits) so personalization has real brand detail to work from. Used
+    for leads that arrived without it: recovered from the Sent folder, or a bare
+    CSV. No-op if the lead already has a description. Mutates the lead and returns
+    True if anything was filled; the CALLER commits. Best-effort."""
     if (getattr(lead, "company_desc", "") or "").strip():
         return False                    # already has brand facts — nothing to do
-    domain = (getattr(lead, "company_domain", "") or "").strip()
-    if not domain and getattr(lead, "email", "") and "@" in lead.email:
-        domain = lead.email.split("@", 1)[1]
-    facts = enrich_org_by_domain(domain)
+    facts = enrich_org_by_domain(_lead_domain(lead))
     if not facts:
         return False
     if not (lead.company or "").strip():
@@ -432,6 +440,50 @@ def backfill_company_facts(lead) -> bool:
     if facts.get("company_desc"):
         lead.company_desc = facts["company_desc"]
     return True
+
+
+def complete_lead(lead) -> bool:
+    """Fill a lead's missing BRAND NAME + facts AND its ICP SCORE from the free
+    Apollo domain lookup (organizations/enrich — no reveal, ZERO credits). This
+    is what completes leads that arrived bare (Sent-folder recovery, a stripped
+    CSV): the company column shows the real brand, and every lead gets an ICP
+    score instead of only Apollo-pulled ones. Mutates the lead; the CALLER
+    commits. Returns True if anything changed. Never raises."""
+    org = _fetch_org(_lead_domain(lead))
+    if not org:
+        return False
+    changed = False
+    if not (lead.company or "").strip() and org.get("name"):
+        lead.company = org["name"]
+        changed = True
+    if not (lead.company_domain or "").strip() and org.get("primary_domain"):
+        lead.company_domain = org["primary_domain"]
+        changed = True
+    if not (lead.company_size or "").strip() and org.get("estimated_num_employees"):
+        lead.company_size = str(org["estimated_num_employees"])
+        changed = True
+    if not (lead.industry or "").strip() and org.get("industry"):
+        lead.industry = org["industry"]
+        changed = True
+    if not (lead.company_desc or "").strip():
+        desc = _org_to_desc(org)
+        if desc:
+            lead.company_desc = desc
+            changed = True
+    # Score ICP for any lead that doesn't have one yet, so the badge shows for
+    # every lead — not just the ones pulled from Apollo.
+    if lead.icp_score is None or lead.icp_score < 0:
+        icp = score_lead(
+            {"title": lead.title or "", "company_domain": lead.company_domain or "",
+             "email": lead.email or "",
+             "industry": lead.industry or org.get("industry", "")},
+            org, (0, 0))
+        lead.icp_score = icp["score"]
+        lead.icp_reasons = "; ".join(icp["reasons"])
+        if not (lead.trigger or "").strip() and icp.get("trigger"):
+            lead.trigger = icp["trigger"]
+        changed = True
+    return changed
 
 
 def _person_to_fields(p: dict) -> dict:
