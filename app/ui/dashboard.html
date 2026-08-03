@@ -70,8 +70,9 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:16px;height:16px;stroke-width:2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       Demo &amp; converted — {% if active_mb %}{{active_mb.email}}{% else %}all mailboxes{% endif %}
     </div>
-    <div class="muted" style="font-size:12.5px;margin-top:3px">Not tracked automatically — enter these from your own records. Saved {% if active_mb %}for this mailbox{% else %}across all mailboxes{% endif %}.</div>
+    <div class="muted" style="font-size:12.5px;margin-top:3px">Not tracked automatically — enter these from your own records. {% if active_mb %}Saved for this mailbox.{% else %}This is the <strong>combined total across all mailboxes</strong> — switch to a mailbox above to record its figures.{% endif %}</div>
   </div>
+  {% if active_mb %}
   <form method="post" action="/metrics" style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">
     <div>
       <label style="margin:0 0 6px">Demos booked</label>
@@ -83,6 +84,12 @@
     </div>
     <button class="btn" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6 9 17l-5-5"/></svg>Save</button>
   </form>
+  {% else %}
+  <div style="display:flex;align-items:flex-end;gap:26px">
+    <div><div class="muted" style="font-size:12px">Demos booked</div><div style="font-size:26px;font-weight:750;line-height:1.1">{{funnel.demo}}</div></div>
+    <div><div class="muted" style="font-size:12px">Converted</div><div style="font-size:26px;font-weight:750;line-height:1.1">{{funnel.converted}}</div></div>
+  </div>
+  {% endif %}
 </div>
 
 <h2>Mailbox health</h2>

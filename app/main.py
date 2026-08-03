@@ -137,8 +137,6 @@ def dashboard(request: Request, polled: int = 0, pollskip: int = 0, saved: int =
     db = SessionLocal()
     try:
         mb = active_mailbox(request, db)
-        # Manual figures are stored per scope: "" = all mailboxes, else the id.
-        scope = str(mb.id) if mb else ""
         recent_q = db.query(Event).order_by(Event.id.desc())
 
         if mb:
@@ -167,10 +165,18 @@ def dashboard(request: Request, polled: int = 0, pollskip: int = 0, saved: int =
                 Message.status == "sent").count()
             mailboxes = db.query(Mailbox).all()
 
-        # Demo and Converted have no live source — we track them off-platform and
-        # enter them by hand on the dashboard, so they're read from the store.
-        demo = get_metric(db, "demo", scope)
-        converted = get_metric(db, "converted", scope)
+        # Demo and Converted have no live source — entered by hand, stored per
+        # mailbox scope. A single mailbox reads its own figure; the combined
+        # (all-mailboxes) view SUMS every mailbox's figures (plus any legacy
+        # global "" entry) so both mailboxes integrate into one number, instead
+        # of the all-view reading an empty global scope.
+        if mb:
+            demo = get_metric(db, "demo", str(mb.id))
+            converted = get_metric(db, "converted", str(mb.id))
+        else:
+            scopes = [""] + [str(m.id) for m in mailboxes]
+            demo = sum(get_metric(db, "demo", s) for s in scopes)
+            converted = sum(get_metric(db, "converted", s) for s in scopes)
         funnel = {
             "leads": leads, "contacted": contacted, "replied": replied,
             "demo": demo, "converted": converted,
