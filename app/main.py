@@ -20,7 +20,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 
 from .analytics import compute as compute_analytics
 from .apollo import (COMPANY_TRAITS, DEFAULT_KEYWORDS, INDUSTRY_OPTIONS,
@@ -401,16 +401,19 @@ def _leads_ctx(request, db, status="", due=-1, page=1,
     # furthest active-enrollment step (sent messages don't change it); active
     # enrollments are few, so this stays cheap.
     STOPPED = ("replied", "bounced", "unsubscribed")
-    # Furthest active enrollment per lead -> its next step. Ties -> highest id.
-    enr_step = {}
+    # Furthest active enrollment per lead -> its next step + when it's due.
+    # Ties -> highest id.
+    enr_step, enr_due = {}, {}
     _primary = {}                                # lead_id -> (step, id)
-    for lid, cstep, eid in db.query(
+    for lid, cstep, nsa, eid in db.query(
             Enrollment.lead_id, Enrollment.current_step,
-            Enrollment.id).filter(Enrollment.status == "active").all():
+            Enrollment.next_send_at, Enrollment.id).filter(
+            Enrollment.status == "active").all():
         prev = _primary.get(lid)
         if prev is None or cstep > prev[0] or (cstep == prev[0] and eid > prev[1]):
             _primary[lid] = (cstep, eid)
             enr_step[lid] = cstep
+            enr_due[lid] = nsa
 
     # Per-step totals over the SCOPED set (mailbox + status). step_counts[step] =
     # how many leads have that step as their NEXT one (0 = first email, 1.. =
@@ -424,6 +427,14 @@ def _leads_ctx(request, db, status="", due=-1, page=1,
         if step >= n_steps:                      # finished the sequence
             continue
         step_counts[step] = step_counts.get(step, 0) + 1
+
+    # Leads waiting on a not-yet-due follow-up (a small set). Used ONLY to sort
+    # them BELOW the ready-to-send leads, so what you can act on now floats to the
+    # top and each follow-up "pops up" the day its gap elapses. Sending stays
+    # manual — this is ordering, not a gate.
+    scheduled_ids = [lid for lid, s in enr_step.items()
+                     if 1 <= s < n_steps and enr_due.get(lid) is not None
+                     and enr_due[lid] > now]
 
     # When a step filter is active, narrow at the DB level so pagination walks
     # every match across all pages — not just whatever landed on this page.
@@ -446,9 +457,11 @@ def _leads_ctx(request, db, status="", due=-1, page=1,
     total_count = view.count()
     total_pages = max(1, (total_count + per_page - 1) // per_page)
     page = max(1, min(page, total_pages))
-    # Best ICP fits first (unscored CSV leads sink below scored ones), so
-    # "Select top N" + limited daily caps spend sends on the likeliest repliers.
-    leads = (view.order_by(Lead.icp_score.desc(), Lead.id.desc())
+    # Ready-to-send leads first (a locked, not-yet-due follow-up sinks to the
+    # bottom), then best ICP fits — so what you can send now surfaces at the top
+    # AND "Select top N" still targets the likeliest repliers among them.
+    ready_first = case((Lead.id.in_(scheduled_ids or [-1]), 1), else_=0)
+    leads = (view.order_by(ready_first, Lead.icp_score.desc(), Lead.id.desc())
              .offset((page - 1) * per_page).limit(per_page).all())
     page_start = (page - 1) * per_page + 1 if leads else 0
     page_end = (page - 1) * per_page + len(leads)
