@@ -224,18 +224,31 @@ def ensure_personalization(db, lead) -> str:
         return ""
     try:
         # If this lead arrived without brand facts (Sent-folder recovery, a bare
-        # CSV), pull them from Apollo by DOMAIN first — the FREE org lookup (no
-        # person reveal, ZERO credits) — so paragraph 1 has real detail instead
-        # of "your company". No-op when the lead already has a description.
-        from .apollo import backfill_company_facts
+        # CSV), or was pulled without a company description, try to fill them from
+        # the Apollo domain lookup first — so paragraph 1 has real detail instead
+        # of "your company". No-op when the lead already has a description. NOTE:
+        # this lookup needs Apollo credits; when the account is out, it returns
+        # nothing and the guard below skips the intro (see the logged reason).
+        from .apollo import backfill_company_facts, org_lookup_blocked_reason
         if backfill_company_facts(lead):
             db.commit()
         # Thin-facts guard: with no real company description there is nothing to
         # ground paragraph 1 on, and a thin prompt is exactly what makes the model
         # break character and return a refusal. Skip cleanly — the email sends
-        # perfectly well without the intro (greeting + pitch).
+        # perfectly well without the intro (greeting + pitch) — but LOG why, so a
+        # whole run going un-personalized is visible in Activity instead of silent.
         if (not (getattr(lead, "company_desc", "") or "").strip()
                 and not (getattr(lead, "company_research", "") or "").strip()):
+            reason = org_lookup_blocked_reason()
+            log(db, "enrich",
+                f"skipped personalization for {lead.email}: no company "
+                f"description to ground it on"
+                + (f" - {reason}" if reason
+                   else " (no Apollo org data for this domain)"))
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
             return ""
         import anthropic
         client = anthropic.Anthropic()

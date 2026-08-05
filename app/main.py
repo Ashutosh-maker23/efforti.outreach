@@ -509,9 +509,11 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                si: int = 0, smb: int = 0, simp: int = 0, smsg: int = 0,
                sdup: int = 0, ssup: int = 0, sslf: int = 0, sinv: int = 0,
                serr: str = "", cmpl: str = "", cn: int = 0,
-               rsc: str = "", rn: int = 0):
+               rsc: str = "", rn: int = 0, backfill: str = ""):
     db = SessionLocal()
     try:
+        # Company-description backfill kicked off (from /run/backfill_company).
+        backfill_result = {"state": backfill} if backfill else None
         # Brand + ICP completion result (from /leads/complete).
         complete_result = {"state": cmpl, "n": cn} if cmpl else None
         # ICP re-score result (from /leads/rescore).
@@ -556,7 +558,8 @@ def leads_page(request: Request, status: str = "", due: int = -1,
             per_page=per_page, pull_result=pull_result,
             send_feedback=send_feedback,
             research_result=research_result, sent_result=sent_result,
-            complete_result=complete_result, rescore_result=rescore_result))
+            complete_result=complete_result, rescore_result=rescore_result,
+            backfill_result=backfill_result))
     finally:
         db.close()
 
@@ -885,7 +888,14 @@ def send_one_lead(request: Request, lead_id: int, step: int = Form(...),
                   bcc: str = Form("")):
     """Send one specific email (first email, or a chosen follow-up) to a single
     lead, right now, from the chosen mailbox. Auto-enrolls on the first send.
-    (Follow-ups always go from the mailbox that started the thread.)"""
+    (Follow-ups always go from the mailbox that started the thread.)
+
+    Before a FOLLOW-UP (step >= 1) we check the inbox for replies first, so a
+    lead who answered since the last poll is flipped to 'replied' and stopped
+    here instead of getting an unintended next touch. A first email (step 0)
+    skips the poll — there can be no reply to it yet."""
+    if step >= 1:
+        poll_inboxes()                       # refresh reply state before follow-up
     db = SessionLocal()
     try:
         lead = db.query(Lead).get(lead_id)
@@ -913,7 +923,14 @@ def send_selected(request: Request, step: int = Form(...), ids: str = Form(""),
     mailbox. Because the step is fixed, everyone in a click gets the same email —
     first emails are never mixed with follow-ups. If 'spread across all' is
     chosen, new leads are round-robined across active mailboxes. Already-enrolled
-    leads keep sending from their own thread's mailbox."""
+    leads keep sending from their own thread's mailbox.
+
+    A FOLLOW-UP batch (step >= 1) polls the inbox first, so anyone who replied
+    since the last check is flipped to 'replied' and skipped — a follow-up never
+    races ahead of a reply that already landed. A first-email batch (step 0)
+    skips the poll (nothing to reply to yet)."""
+    if step >= 1:
+        poll_inboxes()                       # refresh reply state before follow-ups
     db = SessionLocal()
     try:
         lead_ids = [int(x) for x in ids.split(",") if x.strip().isdigit()]
@@ -1274,3 +1291,25 @@ def trigger_poll():
     r = poll_now()
     flag = "polled" if r.get("polled") else "pollskip"
     return RedirectResponse(f"/replies?{flag}=1", status_code=303)
+
+
+@app.post("/run/backfill_company")
+def trigger_backfill_company(scope: str = Form("pool")):
+    """Fill missing company descriptions for the leads via the FREE Apollo search
+    tier (zero reveals, zero credits) so personalization has real brand facts to
+    write from. Runs in the background because it's one search per company; the
+    page returns immediately and progress lands in the Activity log. scope='all'
+    sweeps every lead, otherwise just the sending pool.
+
+    At a zero Apollo balance the search masks firmographics, so this fills little
+    until there is some credit balance — then the same free call returns full
+    descriptions (still zero reveal cost)."""
+    def _work(only_pool: bool):
+        db = SessionLocal()
+        try:
+            from .apollo import backfill_pool_company_facts
+            backfill_pool_company_facts(db, only_pool=only_pool)
+        finally:
+            db.close()
+    threading.Thread(target=_work, args=(scope != "all",), daemon=True).start()
+    return RedirectResponse("/leads?backfill=started", status_code=303)

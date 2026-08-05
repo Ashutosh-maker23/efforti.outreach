@@ -187,6 +187,27 @@ def _do_sends(db, now, manual: bool):
             continue
         step = steps[enr.current_step]
 
+        # Idempotency: never send a step this lead has already RECEIVED. A lead
+        # can accumulate more than one active enrollment (a double-click or a
+        # race in _ensure_enrollment opens a second thread), and each would
+        # otherwise fire the opener again — that is how a recipient got the same
+        # first email two or three times. If a 'sent' message already exists for
+        # this (lead, step), advance past it and skip instead of re-sending.
+        if db.query(Message).filter(
+                Message.lead_email == lead.email,
+                Message.step_index == enr.current_step,
+                Message.status == "sent").first():
+            enr.current_step += 1
+            if enr.current_step >= len(steps):
+                enr.status = "finished"
+                if lead.status == "contacted":
+                    lead.status = "finished"
+            else:
+                enr.next_send_at = add_business_days(
+                    now, steps[enr.current_step].wait_days)
+            stats["skipped_dup"] = stats.get("skipped_dup", 0) + 1
+            continue
+
         # Primary email only: research the company and write the brand-specific
         # intro before sending (cached, so it's a no-op after the first time).
         if enr.current_step == 0:
@@ -217,7 +238,25 @@ def _do_sends(db, now, manual: bool):
 
 
 def process_due_sends():
-    """Scheduler entry point — throttled, business-hours-aware auto-send."""
+    """Scheduler entry point — throttled, business-hours-aware auto-send.
+
+    When a follow-up is due we poll the inbox FIRST, so a lead who replied since
+    the last poll is flipped to 'replied' and dropped before the follow-up fires
+    — the sequence stops at whatever step the reply arrives, never one touch
+    late. (The separate poll job runs on its own cadence; this closes the window
+    between that poll and a due send.)"""
+    now = utcnow()
+    db = SessionLocal()
+    try:
+        due_followup = (db.query(Enrollment)
+                        .filter(Enrollment.status == "active",
+                                Enrollment.current_step >= 1,
+                                Enrollment.next_send_at <= now)
+                        .first() is not None)
+    finally:
+        db.close()
+    if due_followup:
+        poll_inboxes()
     db = SessionLocal()
     try:
         return _do_sends(db, utcnow(), manual=False)
@@ -252,6 +291,23 @@ def send_enrollment_step(db, enr, step_index, cc=None, bcc=None):
         return "done"
     if step_index != enr.current_step:
         return "out_of_order"
+    # Idempotency: if this step has already been sent to this lead (a duplicate
+    # enrollment, or a double-click on the button), do NOT send it again —
+    # advance past it and report it as already handled. This is the guard that
+    # stops a lead from getting the same opener or follow-up twice.
+    if db.query(Message).filter(
+            Message.lead_email == lead.email,
+            Message.step_index == step_index,
+            Message.status == "sent").first():
+        enr.current_step = step_index + 1
+        if enr.current_step >= len(steps):
+            enr.status = "finished"
+            if lead.status == "contacted":
+                lead.status = "finished"
+        else:
+            enr.next_send_at = add_business_days(
+                now, steps[enr.current_step].wait_days)
+        return "already_sent"
     # Day-gap gate: a follow-up (step >= 1) may only go out once its scheduled
     # DAY has arrived. We compare by date, not exact time — for a manual send the
     # whole scheduled day is fair game, so a follow-up due "Aug 3" is sendable any

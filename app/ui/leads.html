@@ -65,6 +65,13 @@
   {% endif %}
 {% endif %}
 
+{% if backfill_result %}
+  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong style="color:var(--ok)">Filling company descriptions in the background</strong> — looking up each brand by domain through the free Apollo search (zero reveals, zero credits) so personalization has real facts to write from. Watch <a href="/activity">Activity</a> for the result, then refresh. Note: if the Apollo balance is at zero, the search masks these fields until you top up.</span>
+  </div>
+{% endif %}
+
 {% if sent_result %}
   {% if sent_result.error %}
   <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
@@ -112,6 +119,7 @@
       {% elif f.status == 'out_of_order' %}Send the earlier email first — you can't skip ahead.
       {% elif f.status == 'too_early' %}Not due yet — this follow-up's day-gap hasn't elapsed. It'll unlock on its scheduled date.
       {% elif f.status == 'done' %}This lead has already received every email in the sequence.
+      {% elif f.status == 'already_sent' %}This email was already sent to this lead — skipped to avoid a duplicate.
       {% else %}Send failed — check the <a href="/activity">Activity</a> log for the reason.
       {% endif %}
       </span>
@@ -282,6 +290,10 @@
     <form method="post" action="/leads/rescore" style="margin-top:14px;border-top:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding-top:14px">
       <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Re-score <strong style="color:var(--text-2)">every</strong> lead on the current ICP rules — the <strong style="color:var(--text-2)">POC-title tiering</strong> where CEO/Founder, COO, Chief of Staff, CFO &amp; CPO rank highest and <strong style="color:var(--text-2)">managers / ICs sink to the bottom</strong>. Nothing is hidden or removed — leads only <strong style="color:var(--text-2)">re-rank</strong> by the new score. Free Apollo domain lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
       <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18M7 12h10m-7 6h4"/></svg>Re-score ICP by POC title</button>
+    </form>
+    <form method="post" action="/run/backfill_company" style="margin-top:14px;border-top:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding-top:14px">
+      <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Fill the <strong style="color:var(--text-2)">company description</strong> for every lead that's missing one, so the AI intro (paragraph 1) has real brand facts to write from. Looks each company up <strong style="color:var(--text-2)">by domain through the free Apollo search</strong> — <strong style="color:var(--text-2)">zero reveals, zero credits</strong>. Runs in the background. <em>At a zero Apollo balance the search masks these fields, so top up first if nothing fills.</em></p>
+      <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>Fill company descriptions (free)</button>
     </form>
   </div>
 </div>

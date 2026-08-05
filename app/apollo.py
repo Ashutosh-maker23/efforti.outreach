@@ -359,19 +359,82 @@ def _org_to_desc(org: dict) -> str:
     return (desc + (("\n\nSignals: " + signals) if signals else ""))[:900]
 
 
-# Apollo's ORGANIZATION enrichment (lookup a company by domain). This is the
-# SEARCH/ENRICH tier — it is NOT a person reveal (people/match, people/bulk_match
-# are the only calls that spend credits), so it costs ZERO Apollo credits. Set
-# APOLLO_ORG_LOOKUP=off to disable it entirely.
+# Company firmographics by domain — the FREE way. There are two Apollo tiers:
+#   1. organizations/enrich — a direct company lookup. Despite being a lookup and
+#      not a person reveal, Apollo METERS it against your credit balance, so at
+#      zero credits it returns HTTP 422 "insufficient credits" and no data.
+#   2. mixed_people/api_search filtered by the company domain — the SEARCH tier.
+#      This costs ZERO credits (only revealing a person's EMAIL, via people/match,
+#      spends a credit). On an account WITH a credit balance the search result's
+#      embedded `organization` object carries the firmographics we need
+#      (short_description, industry, headcount) for free — this is how the pull
+#      reads company data before it ever pays to reveal, and how brand facts got
+#      filled "for free" originally.
+# So we prefer the free SEARCH and only use enrich as a bonus. IMPORTANT current
+# caveat: when the Apollo balance is exactly ZERO, Apollo also MASKS the search
+# firmographics — the org object comes back as just {name, has_industry: true,
+# has_revenue: true, ...} with the actual values nulled. So at zero credits this
+# yields the company NAME but no description; the moment there is any credit
+# balance the same free call returns the full firmographics again (still 0 spend).
+# _ORG_LOOKUP_BLOCKED records the zero-credit state so the intro path can say so.
 ORG_ENRICH_URL = "https://api.apollo.io/api/v1/organizations/enrich"
 _ORG_CACHE: dict = {}                  # domain -> raw Apollo org dict (per process)
+_ORG_LOOKUP_BLOCKED = ""               # non-empty once Apollo refuses for credits
+
+
+def org_lookup_blocked_reason() -> str:
+    """'' normally; a human-readable reason once Apollo has refused an org lookup
+    for lack of credits this process. Lets the personalization path explain WHY an
+    intro was skipped instead of going silent."""
+    return _ORG_LOOKUP_BLOCKED
+
+
+def _org_has_facts(org: dict) -> bool:
+    """True if an org object actually carries usable firmographics (not just a
+    name + Apollo's masked has_* presence flags returned at zero credits)."""
+    return bool(org) and bool(
+        (org.get("short_description") or "").strip()
+        or org.get("industry") or org.get("estimated_num_employees")
+        or org.get("annual_revenue_printed") or org.get("founded_year"))
+
+
+def _search_org_by_domain(domain: str) -> dict:
+    """Company org object via the FREE people-SEARCH tier (mixed_people/api_search
+    filtered by domain) — ZERO Apollo credits, never a person reveal. Returns the
+    org object from the first match, or {}. At zero credits Apollo masks the
+    firmographics (name only); with any balance it returns them in full for free."""
+    global _ORG_LOOKUP_BLOCKED
+    if not os.environ.get("APOLLO_API_KEY"):
+        return {}
+    body = {"q_organization_domains_list": [domain], "page": 1, "per_page": 1}
+    for attempt in range(2):
+        try:
+            r = requests.post(SEARCH_URL, headers=_headers(), json=body, timeout=25)
+            if r.status_code == 429:               # rate limited — back off once
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            if r.status_code == 200:
+                people = r.json().get("people") or []
+                return (people[0].get("organization") or {}) if people else {}
+            if r.status_code in (402, 422, 403) and \
+                    "credit" in (r.text or "").lower():
+                _ORG_LOOKUP_BLOCKED = ("Apollo returned no company facts: the "
+                                       "account is out of credits (search still "
+                                       "runs free, but firmographics are masked "
+                                       "at zero balance) - top up to restore them")
+            break
+        except Exception:
+            break
+    return {}
 
 
 def _fetch_org(domain: str) -> dict:
-    """The raw Apollo ORGANIZATION object for a domain, free (organization
-    enrichment, NOT a person reveal -> ZERO credits), cached per domain so N
-    leads at one company cost at most one lookup. Returns {} on any miss/error,
-    when APOLLO_ORG_LOOKUP=off, or with no API key."""
+    """The raw Apollo ORGANIZATION object for a domain, cached per domain so N
+    leads at one company cost at most one lookup. Prefers the FREE search tier and
+    only falls back to organizations/enrich; returns {} when both miss, when
+    APOLLO_ORG_LOOKUP=off, with no API key, or when Apollo masks/refuses for
+    insufficient credits (which also sets _ORG_LOOKUP_BLOCKED)."""
+    global _ORG_LOOKUP_BLOCKED
     domain = normalize_domain(domain or "")
     if not domain:
         return {}
@@ -380,18 +443,32 @@ def _fetch_org(domain: str) -> dict:
     org: dict = {}
     if (os.environ.get("APOLLO_ORG_LOOKUP", "on").lower() != "off"
             and os.environ.get("APOLLO_API_KEY")):
-        for attempt in range(2):
-            try:
-                r = requests.get(ORG_ENRICH_URL, headers=_headers(),
-                                 params={"domain": domain}, timeout=20)
-                if r.status_code == 429:           # rate limited — back off once
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
-                if r.status_code == 200:
-                    org = r.json().get("organization") or {}
-                break
-            except Exception:
-                break
+        # FREE first: the search tier. Zero credits, and it returns full
+        # firmographics whenever the account has any balance.
+        org = _search_org_by_domain(domain)
+        # Only if the free search gave nothing usable do we try the (credit-metered)
+        # direct enrich as a bonus — it's a no-op 422 at zero credits.
+        if not _org_has_facts(org):
+            for attempt in range(2):
+                try:
+                    r = requests.get(ORG_ENRICH_URL, headers=_headers(),
+                                     params={"domain": domain}, timeout=20)
+                    if r.status_code == 429:       # rate limited — back off once
+                        time.sleep(1.5 * (attempt + 1))
+                        continue
+                    if r.status_code == 200:
+                        enriched = r.json().get("organization") or {}
+                        if _org_has_facts(enriched) or not org:
+                            org = enriched
+                    elif r.status_code in (402, 422, 403) and \
+                            "credit" in (r.text or "").lower():
+                        if not _ORG_LOOKUP_BLOCKED:
+                            _ORG_LOOKUP_BLOCKED = (
+                                "Apollo returned no company facts: the account is "
+                                "out of credits - top up to restore brand facts")
+                    break
+                except Exception:
+                    break
     _ORG_CACHE[domain] = org
     return org
 
@@ -444,11 +521,12 @@ def backfill_company_facts(lead) -> bool:
 
 def complete_lead(lead) -> bool:
     """Fill a lead's missing BRAND NAME + facts AND its ICP SCORE from the free
-    Apollo domain lookup (organizations/enrich — no reveal, ZERO credits). This
-    is what completes leads that arrived bare (Sent-folder recovery, a stripped
-    CSV): the company column shows the real brand, and every lead gets an ICP
-    score instead of only Apollo-pulled ones. Mutates the lead; the CALLER
-    commits. Returns True if anything changed. Never raises."""
+    Apollo SEARCH tier (company looked up by domain — no reveal, ZERO credits;
+    see _fetch_org). This is what completes leads that arrived bare or were pulled
+    without a description: the company column shows the real brand, personalization
+    gets a description to ground on, and every lead gets an ICP score instead of
+    only Apollo-pulled ones. Mutates the lead; the CALLER commits. Returns True if
+    anything changed. Never raises."""
     org = _fetch_org(_lead_domain(lead))
     if not org:
         return False
@@ -484,6 +562,50 @@ def complete_lead(lead) -> bool:
             lead.trigger = icp["trigger"]
         changed = True
     return changed
+
+
+def backfill_pool_company_facts(db, limit=None, only_pool=True) -> dict:
+    """Fill company_desc (+ brand/industry/headcount/ICP) for every lead that is
+    missing a description, using the FREE Apollo search tier — ZERO reveals, ZERO
+    credits. This is the bulk repair for the ~4.8k leads pulled without a
+    description, so personalization has real brand facts to write from.
+
+    Idempotent and re-runnable: a lead that already has a description is skipped,
+    so re-running only works the still-empty ones (e.g. after a credit top-up).
+    Commits in batches. Returns a stats dict. `only_pool` limits it to the sending
+    pool (verified/enrolled/contacted); pass False to sweep every lead.
+
+    NOTE: at a ZERO Apollo balance the search masks firmographics, so this fills
+    almost nothing until there is some credit balance — at which point the SAME
+    free call returns full descriptions (still zero reveal cost)."""
+    q = db.query(Lead).filter(
+        (Lead.company_desc == "") | (Lead.company_desc.is_(None)))
+    if only_pool:
+        q = q.filter(Lead.status.in_(["verified", "enrolled", "contacted"]))
+    leads = q.order_by(Lead.id).limit(limit).all() if limit else \
+        q.order_by(Lead.id).all()
+    stats = {"scanned": 0, "filled_desc": 0, "changed": 0, "still_missing": 0}
+    for i, lead in enumerate(leads, 1):
+        stats["scanned"] += 1
+        try:
+            if complete_lead(lead):
+                stats["changed"] += 1
+        except Exception:
+            pass
+        if (lead.company_desc or "").strip():
+            stats["filled_desc"] += 1
+        else:
+            stats["still_missing"] += 1
+        if i % 25 == 0:
+            db.commit()
+    db.commit()
+    blocked = org_lookup_blocked_reason()
+    log(db, "enrich",
+        f"company backfill (free search, 0 credits): scanned {stats['scanned']}, "
+        f"filled {stats['filled_desc']}, still missing {stats['still_missing']}"
+        + (f" - {blocked}" if blocked else ""))
+    db.commit()
+    return stats
 
 
 def rescore_lead(lead) -> bool:
