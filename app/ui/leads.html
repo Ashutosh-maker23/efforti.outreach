@@ -596,7 +596,9 @@ function setParam(k,v){var u=new URL(location.href);
         document.getElementById('bulkMb').value=mbVal();
         document.getElementById('bulkCc').value=ccVal();
         document.getElementById('bulkBcc').value=bccVal();
-        document.getElementById('bulkForm').submit();
+        window.guardedSend('/leads/send_selected',
+          new FormData(document.getElementById('bulkForm')),
+          'Sending '+stepText(+s)+' to '+g[s]+' lead'+(g[s]==1?'':'s')+'…');
       };
       btns.appendChild(b);
     });
@@ -612,6 +614,58 @@ function setParam(k,v){var u=new URL(location.href);
     rowboxes().forEach(function(b,i){b.checked=i<n;});refresh();});
   clear.addEventListener('click',function(e){e.preventDefault();
     rowboxes().forEach(function(b){b.checked=false;});refresh();});
+})();
+</script>
+
+<!-- ── Sending guard ────────────────────────────────────────────────────────
+     Sends run as a fetch (not a full-page POST) so the page never navigates
+     mid-send. While one is in flight we show a blocking overlay AND warn on any
+     refresh/close/navigate, so a send can never be silently orphaned in the
+     background with the UI looking idle. -->
+<div id="sendOverlay" style="display:none;position:fixed;inset:0;z-index:9999;
+     background:rgba(6,10,16,.72);align-items:center;justify-content:center">
+  <div style="background:var(--card,#111826);border:1px solid color-mix(in srgb,var(--accent,#6ea8fe) 45%,transparent);
+       border-radius:14px;padding:26px 30px;max-width:400px;text-align:center;box-shadow:0 14px 46px rgba(0,0,0,.55)">
+    <div style="width:34px;height:34px;margin:0 auto 14px;border-radius:50%;
+         border:3px solid color-mix(in srgb,var(--accent,#6ea8fe) 28%,transparent);
+         border-top-color:var(--accent,#6ea8fe);animation:efspin .8s linear infinite"></div>
+    <div style="font-weight:700;font-size:15px;margin-bottom:6px" id="sendOverlayTitle">Sending emails…</div>
+    <div class="muted" style="font-size:12.5px;line-height:1.5">This takes a moment per email. <strong>Please don't refresh or close this tab</strong> until it finishes — the send is running right here.</div>
+  </div>
+</div>
+<style>@keyframes efspin{to{transform:rotate(360deg)}}</style>
+<script>
+window.__sending=false;
+(function(){
+  var overlay=document.getElementById('sendOverlay'),
+      title=document.getElementById('sendOverlayTitle');
+  // Native "Leave site?" prompt whenever a send is in flight.
+  window.addEventListener('beforeunload',function(e){
+    if(window.__sending){e.preventDefault();e.returnValue='';return '';}
+  });
+  // POST via fetch, keep the overlay up, then navigate to the result ourselves
+  // (clearing the flag first so our own redirect doesn't trip the warning).
+  window.guardedSend=function(url,formData,label){
+    window.__sending=true;
+    if(title&&label)title.textContent=label;
+    if(overlay)overlay.style.display='flex';
+    fetch(url,{method:'POST',body:formData,redirect:'follow'})
+      .then(function(resp){window.__sending=false;window.location.href=resp.url||'/leads';})
+      .catch(function(err){
+        window.__sending=false;
+        if(overlay)overlay.style.display='none';
+        alert('The send did not complete cleanly: '+err+
+              '\n\nOpen the Activity page to see exactly what was sent.');
+      });
+  };
+  // Per-lead send buttons: intercept the form (its action ends with /send).
+  document.addEventListener('submit',function(e){
+    var f=e.target;
+    if(f&&f.tagName==='FORM'&&/\/send$/.test(f.getAttribute('action')||'')){
+      e.preventDefault();
+      window.guardedSend(f.action,new FormData(f),'Sending email…');
+    }
+  },true);
 })();
 </script>
 {% endblock %}
