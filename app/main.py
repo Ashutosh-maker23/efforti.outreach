@@ -225,11 +225,23 @@ def update_metrics(request: Request, demo: str = Form("0"),
     db = SessionLocal()
     try:
         mb = active_mailbox(request, db)
-        scope = str(mb.id) if mb else ""
         d = int(demo) if demo.strip().lstrip("-").isdigit() else 0
         c = int(converted) if converted.strip().lstrip("-").isdigit() else 0
-        d = set_metric(db, "demo", d, scope)
-        c = set_metric(db, "converted", c, scope)
+        if mb:
+            d = set_metric(db, "demo", d, str(mb.id))
+            c = set_metric(db, "converted", c, str(mb.id))
+        else:
+            # Combined ("all mailboxes") view: the input is pre-filled with the
+            # TOTAL across every mailbox, so treat the entered number as the
+            # desired total and keep the remainder in the global "" bucket
+            # (total = "" + sum of per-mailbox scopes). This lets the figure be
+            # edited from the combined view without double-counting the per-
+            # mailbox entries — which is why the input can live here again.
+            mbs = db.query(Mailbox).all()
+            mb_demo = sum(get_metric(db, "demo", str(m.id)) for m in mbs)
+            mb_conv = sum(get_metric(db, "converted", str(m.id)) for m in mbs)
+            set_metric(db, "demo", max(0, d - mb_demo), "")
+            set_metric(db, "converted", max(0, c - mb_conv), "")
         log(db, "metric", f"Demo/converted set to {d}/{c}"
                           f"{' for ' + mb.email if mb else ' (all mailboxes)'}")
         db.commit()
@@ -423,15 +435,27 @@ def _leads_ctx(request, db, status="", due=-1, page=1,
             enr_step[lid] = cstep
             enr_due[lid] = nsa
 
+    # Leads whose FIRST email (opener) has already gone out. Ground truth is a
+    # sent step-0 message, which survives after the enrollment finishes or halts —
+    # unlike enr_step above, which only sees ACTIVE enrollments. Without this, a
+    # lead that completed the whole sequence (enrollment no longer 'active', so
+    # missing from enr_step) falls back to "step 0" and wrongly resurfaces under
+    # the First-email filter and its count.
+    opener_sent = {e for (e,) in db.query(Message.lead_email)
+                   .filter(Message.step_index == 0, Message.status == "sent")}
+
     # Per-step totals over the SCOPED set (mailbox + status). step_counts[step] =
     # how many leads have that step as their NEXT one (0 = first email, 1.. =
     # follow-ups). One number per step — the step dropdown is the only filter, so
     # a step's count never changes with any other control.
     step_counts = {}
-    for lid, lstatus in base.with_entities(Lead.id, Lead.status).all():
+    for lid, lemail, lstatus in base.with_entities(
+            Lead.id, Lead.email, Lead.status).all():
         if lstatus in STOPPED:
             continue
         step = enr_step.get(lid, 0)
+        if step == 0 and lemail in opener_sent:
+            continue                             # opener already sent — not first-email
         if step >= n_steps:                      # finished the sequence
             continue
         step_counts[step] = step_counts.get(step, 0) + 1
@@ -450,7 +474,13 @@ def _leads_ctx(request, db, status="", due=-1, page=1,
     view = base
     if due == 0:                                 # first email not yet sent
         past_first = [lid for lid, s in enr_step.items() if s >= 1]
-        view = base.filter(Lead.status.notin_(STOPPED))
+        # Exclude anyone whose opener already went out (finished/halted leads whose
+        # enrollment is no longer 'active' and so isn't in past_first) — the sent
+        # step-0 message is the durable signal that the first email is done.
+        view = base.filter(
+            Lead.status.notin_(STOPPED),
+            ~Lead.email.in_(db.query(Message.lead_email).filter(
+                Message.step_index == 0, Message.status == "sent")))
         if past_first:
             view = view.filter(~Lead.id.in_(past_first))
     elif due > 0:                                # specific follow-up due next
@@ -509,11 +539,9 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                si: int = 0, smb: int = 0, simp: int = 0, smsg: int = 0,
                sdup: int = 0, ssup: int = 0, sslf: int = 0, sinv: int = 0,
                serr: str = "", cmpl: str = "", cn: int = 0,
-               rsc: str = "", rn: int = 0, backfill: str = ""):
+               rsc: str = "", rn: int = 0):
     db = SessionLocal()
     try:
-        # Company-description backfill kicked off (from /run/backfill_company).
-        backfill_result = {"state": backfill} if backfill else None
         # Brand + ICP completion result (from /leads/complete).
         complete_result = {"state": cmpl, "n": cn} if cmpl else None
         # ICP re-score result (from /leads/rescore).
@@ -558,8 +586,7 @@ def leads_page(request: Request, status: str = "", due: int = -1,
             per_page=per_page, pull_result=pull_result,
             send_feedback=send_feedback,
             research_result=research_result, sent_result=sent_result,
-            complete_result=complete_result, rescore_result=rescore_result,
-            backfill_result=backfill_result))
+            complete_result=complete_result, rescore_result=rescore_result))
     finally:
         db.close()
 
@@ -1291,25 +1318,3 @@ def trigger_poll():
     r = poll_now()
     flag = "polled" if r.get("polled") else "pollskip"
     return RedirectResponse(f"/replies?{flag}=1", status_code=303)
-
-
-@app.post("/run/backfill_company")
-def trigger_backfill_company(scope: str = Form("pool")):
-    """Fill missing company descriptions for the leads via the FREE Apollo search
-    tier (zero reveals, zero credits) so personalization has real brand facts to
-    write from. Runs in the background because it's one search per company; the
-    page returns immediately and progress lands in the Activity log. scope='all'
-    sweeps every lead, otherwise just the sending pool.
-
-    At a zero Apollo balance the search masks firmographics, so this fills little
-    until there is some credit balance — then the same free call returns full
-    descriptions (still zero reveal cost)."""
-    def _work(only_pool: bool):
-        db = SessionLocal()
-        try:
-            from .apollo import backfill_pool_company_facts
-            backfill_pool_company_facts(db, only_pool=only_pool)
-        finally:
-            db.close()
-    threading.Thread(target=_work, args=(scope != "all",), daemon=True).start()
-    return RedirectResponse("/leads?backfill=started", status_code=303)

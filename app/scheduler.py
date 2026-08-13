@@ -113,8 +113,8 @@ def add_business_days(start: datetime, n: int) -> datetime:
     This is how every follow-up gap is measured. A week has only five working
     days, so a wait of 2 means "two weekdays from now" — a Saturday/Sunday never
     counts toward the gap and a touch never comes due on a weekend. With the
-    seeded gaps (2, 2, 3, 3) the follow-ups therefore land on working days
-    2, 4, 7 and 10, keeping the whole sequence inside the Mon-Fri week.
+    seeded gaps (3, 4, 5, 4) the follow-ups therefore land on working days
+    3, 7, 12 and 16, spanning about three Mon-Fri weeks.
 
     n <= 0 returns `start` unchanged (the first email has no wait). Time-of-day
     is preserved; only the date walks forward. The exact send moment is still

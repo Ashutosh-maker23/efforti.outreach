@@ -218,7 +218,7 @@ def import_from_sent(db, mailbox, since_imap: str, before_imap: str,
     (step 0) is recorded as already sent, enrolled at follow-up 1 with
     next_send_at=anchor_at and threaded onto the original message (so follow-up
     1 replies inside that same thread). From the anchor the normal working-day
-    cadence (2/4/7/10) carries each lead forward exactly like a fresh lead.
+    cadence (3/7/12/16) carries each lead forward exactly like a fresh lead.
 
     Sends NOTHING — it only writes records; the user still clicks to send the
     follow-up. Dedupes against existing leads and the suppression list, so

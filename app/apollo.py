@@ -359,25 +359,24 @@ def _org_to_desc(org: dict) -> str:
     return (desc + (("\n\nSignals: " + signals) if signals else ""))[:900]
 
 
-# Company firmographics by domain — the FREE way. There are two Apollo tiers:
+# Company firmographics by domain — the FREE way, and ONLY the free way. Apollo
+# has two tiers, and we deliberately use just the free one:
 #   1. organizations/enrich — a direct company lookup. Despite being a lookup and
-#      not a person reveal, Apollo METERS it against your credit balance, so at
-#      zero credits it returns HTTP 422 "insufficient credits" and no data.
+#      not a person reveal, Apollo METERS it against your credit balance, so it can
+#      SPEND A CREDIT on every call. We do NOT use it: filling a company
+#      description must never cost a credit.
 #   2. mixed_people/api_search filtered by the company domain — the SEARCH tier.
 #      This costs ZERO credits (only revealing a person's EMAIL, via people/match,
 #      spends a credit). On an account WITH a credit balance the search result's
 #      embedded `organization` object carries the firmographics we need
-#      (short_description, industry, headcount) for free — this is how the pull
-#      reads company data before it ever pays to reveal, and how brand facts got
-#      filled "for free" originally.
-# So we prefer the free SEARCH and only use enrich as a bonus. IMPORTANT current
-# caveat: when the Apollo balance is exactly ZERO, Apollo also MASKS the search
-# firmographics — the org object comes back as just {name, has_industry: true,
-# has_revenue: true, ...} with the actual values nulled. So at zero credits this
-# yields the company NAME but no description; the moment there is any credit
+#      (short_description, industry, headcount) for free — this is how brand facts
+#      get filled at no cost.
+# IMPORTANT caveat: when the Apollo balance is exactly ZERO, Apollo MASKS the
+# search firmographics — the org object comes back as just {name, has_industry:
+# true, has_revenue: true, ...} with the actual values nulled. So at zero credits
+# this yields the company NAME but no description; the moment there is any credit
 # balance the same free call returns the full firmographics again (still 0 spend).
 # _ORG_LOOKUP_BLOCKED records the zero-credit state so the intro path can say so.
-ORG_ENRICH_URL = "https://api.apollo.io/api/v1/organizations/enrich"
 _ORG_CACHE: dict = {}                  # domain -> raw Apollo org dict (per process)
 _ORG_LOOKUP_BLOCKED = ""               # non-empty once Apollo refuses for credits
 
@@ -430,11 +429,11 @@ def _search_org_by_domain(domain: str) -> dict:
 
 def _fetch_org(domain: str) -> dict:
     """The raw Apollo ORGANIZATION object for a domain, cached per domain so N
-    leads at one company cost at most one lookup. Prefers the FREE search tier and
-    only falls back to organizations/enrich; returns {} when both miss, when
-    APOLLO_ORG_LOOKUP=off, with no API key, or when Apollo masks/refuses for
-    insufficient credits (which also sets _ORG_LOOKUP_BLOCKED)."""
-    global _ORG_LOOKUP_BLOCKED
+    leads at one company cost at most one lookup. Uses ONLY the FREE people-search
+    tier — it NEVER calls the credit-metered organizations/enrich endpoint, so an
+    org lookup can never spend an Apollo credit. Returns {} with no domain, no API
+    key, when APOLLO_ORG_LOOKUP=off, or when the free search finds nothing (a zero
+    balance masks the firmographics, which also sets _ORG_LOOKUP_BLOCKED)."""
     domain = normalize_domain(domain or "")
     if not domain:
         return {}
@@ -443,32 +442,11 @@ def _fetch_org(domain: str) -> dict:
     org: dict = {}
     if (os.environ.get("APOLLO_ORG_LOOKUP", "on").lower() != "off"
             and os.environ.get("APOLLO_API_KEY")):
-        # FREE first: the search tier. Zero credits, and it returns full
-        # firmographics whenever the account has any balance.
+        # FREE only: the search tier. Zero credits, and it returns full
+        # firmographics whenever the account has any balance. We deliberately do
+        # NOT fall back to organizations/enrich, which Apollo meters against the
+        # credit balance — filling a description must never cost a credit.
         org = _search_org_by_domain(domain)
-        # Only if the free search gave nothing usable do we try the (credit-metered)
-        # direct enrich as a bonus — it's a no-op 422 at zero credits.
-        if not _org_has_facts(org):
-            for attempt in range(2):
-                try:
-                    r = requests.get(ORG_ENRICH_URL, headers=_headers(),
-                                     params={"domain": domain}, timeout=20)
-                    if r.status_code == 429:       # rate limited — back off once
-                        time.sleep(1.5 * (attempt + 1))
-                        continue
-                    if r.status_code == 200:
-                        enriched = r.json().get("organization") or {}
-                        if _org_has_facts(enriched) or not org:
-                            org = enriched
-                    elif r.status_code in (402, 422, 403) and \
-                            "credit" in (r.text or "").lower():
-                        if not _ORG_LOOKUP_BLOCKED:
-                            _ORG_LOOKUP_BLOCKED = (
-                                "Apollo returned no company facts: the account is "
-                                "out of credits - top up to restore brand facts")
-                    break
-                except Exception:
-                    break
     _ORG_CACHE[domain] = org
     return org
 

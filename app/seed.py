@@ -23,7 +23,7 @@ from .models import Enrollment, Sequence, SequenceStep, log
 
 # Bump this name whenever the canonical copy changes so a fresh version seeds
 # cleanly and becomes the single active default (older ones are retired below).
-SEQUENCE_NAME = "Efforti CEO cold sequence v7"
+SEQUENCE_NAME = "Efforti CEO cold sequence v8"
 
 # ── Email 1 · Day 0 · opens the thread ──────────────────────────────────────
 # Subjects on the thread-opening steps (0, 2, 4) carry {{first_name}} so each
@@ -44,7 +44,7 @@ Worth 20 minutes this week?
 
 P.S. Prefer to poke at it yourself first? agents.efforti.com. First team live in ~15 minutes, no integrations."""
 
-# ── Email 2 · Working day 2 · reply in email 1's thread (blank subject) ─────
+# ── Email 2 · Working day 3 · reply in email 1's thread (blank subject) ─────
 STEP_1_BODY = """Hi {{first_name}},
 
 A manager using Efforti told us: "I haven't run a status meeting in weeks, and I've never had a clearer picture of my team."
@@ -55,7 +55,7 @@ Setup took 15 minutes. No Jira cleanup, no new tool for the team to learn.
 
 Want to see it on your own team's rhythm? I could do a quick 20 minutes this week or next."""
 
-# ── Email 3 · Working day 4 · reply in the opener's thread (blank subject) ──
+# ── Email 3 · Working day 7 · reply in the opener's thread (blank subject) ──
 STEP_2_SUBJECT = ""
 STEP_2_BODY = """Hi {{first_name}},
 
@@ -67,7 +67,7 @@ That's ~10 hours back per team, every week. Across your teams at {{company}}, yo
 
 Should I send over a two-week pilot plan? Zero cost, no integration, and you keep your numbers either way."""
 
-# ── Email 4 · Working day 7 · reply in email 3's thread (blank subject) ─────
+# ── Email 4 · Working day 12 · reply in email 3's thread (blank subject) ────
 STEP_3_BODY = """Hi {{first_name}},
 
 Last thought from me on this: the most expensive thing in delivery is rarely the work. It's the wait. Blockers sit for days because raising them means interrupting someone senior, and by the time they surface in a Friday review, the sprint has already slipped.
@@ -78,7 +78,7 @@ We hold our pilots to a measurable bar: at least one blocker caught early in two
 
 20 minutes to see your team's version of that radar?"""
 
-# ── Email 5 · Working day 10 · reply in the opener's thread (blank subject) ──
+# ── Email 5 · Working day 16 · reply in the opener's thread (blank subject) ──
 STEP_4_SUBJECT = ""
 STEP_4_BODY = """Hi {{first_name}},
 
@@ -97,18 +97,18 @@ def _steps_for(seq_id):
     """The 5 manager steps for a given sequence id. Waits are the gaps between
     touches, counted in WORKING days (Mon-Fri) — the scheduler advances
     next_send_at with add_business_days, so weekends never count toward a gap
-    and no touch lands on a weekend. Gaps (0, 2, 2, 3, 3) put the follow-ups on
-    working days 2, 4, 7 and 10, keeping the whole run inside the week."""
+    and no touch lands on a weekend. Gaps (0, 3, 4, 5, 4) put the follow-ups on
+    working days 3, 7, 12 and 16."""
     return [
         SequenceStep(sequence_id=seq_id, step_index=0, wait_days=0,
                      subject=STEP_0_SUBJECT, body=STEP_0_BODY),
-        SequenceStep(sequence_id=seq_id, step_index=1, wait_days=2,
+        SequenceStep(sequence_id=seq_id, step_index=1, wait_days=3,
                      subject="", body=STEP_1_BODY),
-        SequenceStep(sequence_id=seq_id, step_index=2, wait_days=2,
+        SequenceStep(sequence_id=seq_id, step_index=2, wait_days=4,
                      subject=STEP_2_SUBJECT, body=STEP_2_BODY),
-        SequenceStep(sequence_id=seq_id, step_index=3, wait_days=3,
+        SequenceStep(sequence_id=seq_id, step_index=3, wait_days=5,
                      subject="", body=STEP_3_BODY),
-        SequenceStep(sequence_id=seq_id, step_index=4, wait_days=3,
+        SequenceStep(sequence_id=seq_id, step_index=4, wait_days=4,
                      subject=STEP_4_SUBJECT, body=STEP_4_BODY),
     ]
 
@@ -162,10 +162,9 @@ def reanchor_inflight_to_monday(db):
     mid-sequence enrollment (opener sent, sequence not finished) whose next
     touch is unscheduled, falls before the cutover Monday, or lands on a
     weekend, we snap next_send_at to that Monday. From there the seeded
-    working-day gaps (2, 2, 3, 3) carry it forward exactly like a fresh lead, so
-    the whole book converges on the same 2/4/7/10 pattern. Example for a lead
-    resuming at follow-up 1: fu1 Mon Aug 3 -> fu2 Wed Aug 5 -> fu3 Mon Aug 10 ->
-    fu4 Thu Aug 13.
+    working-day gaps (3, 4, 5, 4) carry it forward exactly like a fresh lead, so
+    the whole book converges on the same 3/7/12/16 pattern (follow-ups on working
+    days 3, 7, 12 and 16 from the opener).
 
     A follow-up already sitting on a valid weekday from the Monday onward is
     left alone. The pass is idempotent and cheap, so it runs on EVERY boot: once
@@ -201,5 +200,5 @@ def reanchor_inflight_to_monday(db):
         log(db, "sequence",
             f"Cutover: moved {moved} in-flight follow-up(s) onto "
             f"{REANCHOR_AT:%Y-%m-%d} — no weekend or pre-Monday sends; the "
-            f"2/4/7/10 working-day spacing resumes from there.")
+            f"3/7/12/16 working-day spacing resumes from there.")
     db.commit()

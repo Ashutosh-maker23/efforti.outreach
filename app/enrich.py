@@ -36,6 +36,16 @@ from .models import Lead, log
 # Cheapest capable model for a short, grounded write-up per lead. Override via env.
 OPENER_MODEL = os.environ.get("OPENER_MODEL", "claude-haiku-4-5")
 
+# Provider switch: if GROQ_API_KEY is set we write the intro with Groq
+# (OpenAI-compatible, fast and cheap) instead of Claude. Writing two short
+# paragraphs from facts we already supply is a simple, well-scoped task an open
+# model handles cleanly, and the output guards below (_clean_block /
+# _looks_like_meta) are provider-agnostic — a weak or off-format reply is still
+# rejected either way. Override the model with GROQ_MODEL if the default name
+# changes on your Groq account.
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+
 PERSONALIZE_SYSTEM = """You write the personalized opening of a cold sales email for \
 Efforti. First understand exactly what Efforti is — the email must promise ONLY what Efforti \
 actually delivers, or it reads as not understanding the reader's business.
@@ -80,21 +90,45 @@ scale (headcount, customers/users, retail locations, countries served), how long
 operated (founded year), revenue or funding, or their reach/footprint. Prefer a hard specific \
 (a number, a named product, a named first) over a vague adjective.
 
-  TONE: sincere, professional, genuinely commendable — real recognition of the achievement. \
-NOT flattery, NOT an informal throwaway ("oh, X has done this"), and NOT the flat "X is a Y \
-founded in Z" encyclopedia opener. The shape you want is like "It is genuinely commendable that \
-<company> has <specific achievement>" — but VARY the wording every time and let the specific \
-fact lead; never reuse a stock phrase.
+  TONE - GENUINELY APPRECIATIVE, not a data readout: this is earned admiration for what they \
+have built, warmly expressed. Do NOT merely STATE the facts ("X has 22 employees and does Y"); \
+RECOGNIZE the achievement in them. At least one of the two sentences must clearly convey \
+appreciation - that it is genuinely impressive / commendable / no small feat that the company \
+has done this - AND acknowledge that scaling it this far (this many people, users, countries, \
+years) is a hard, real accomplishment worth respecting. Sincere and professional, like you \
+truly admire what they've pulled off. Still grounded in the actual facts (never empty flattery, \
+never "largest/leading/#1" unless the facts say so), third person by name, never "you". Vary \
+the wording every time; shapes to draw from (do not reuse verbatim): "It is genuinely \
+impressive that <company> has <achievement>", "Scaling <X> to <Y> is no small feat", "Building \
+<X> over <Z> years is a real accomplishment". Let the specific fact lead the admiration.
 
   NOT GENERIC: the sentence must be one that could ONLY have been written about THIS company. \
 If the exact line could sit unchanged under a different company's name, it is too generic — \
 rewrite it around a specific fact from the data. Do NOT invent superlatives or rankings the \
 facts don't state ("largest", "leading", "#1").
 
-  Aim for one to two crisp sentences (about two lines, 25-40 words).
+  LENGTH: EXACTLY TWO sentences that TOGETHER total 50 to 60 words - aim squarely for that \
+range (about 55 words), not fewer. Make BOTH sentences substantial (roughly 25-30 words each) \
+by packing in several concrete details from the description: what they build or their category, \
+their scale (headcount, users, reach, locations), founding year, and any named focus area or \
+milestone. A paragraph under 50 words is TOO SHORT: if you are under 50, add another concrete \
+detail from the facts (another focus area, a number, the founding year, the industry) until the \
+two sentences together reach 55-60 words - built ENTIRELY from the supplied facts and never \
+invented filler. Never exceed 60 words or two sentences; only if the facts are truly too sparse \
+may it run a little shorter.
 
-  The examples below are for TONE AND SHAPE ONLY. They are deliberately different industries; \
-do NOT borrow their subject matter, their facts, or their wording — only their register:
+  CALIBRATION (copy this LENGTH, not the subject): a correctly-sized paragraph 1 reads like - \
+"Acme has spent nine years building a logistics-technology platform that now moves freight \
+across more than 40 countries for over 5,000 business customers, growing to a 300-person team \
+since 2016. Its work spans real-time shipment tracking, warehouse automation, and last-mile \
+delivery, and sustaining that breadth of operation at this scale is a genuinely hard \
+achievement." That is exactly two sentences and about 57 words - your paragraph 1 must be this \
+full; if yours is shorter than that, it is wrong.
+
+  The short one-liners below are for TONE AND REGISTER ONLY, NOT length - your paragraph 1 must \
+be the fuller two-sentence, 50-60 word block described above, never as short as these. They are \
+deliberately different industries; do NOT borrow their subject matter, their facts, or their \
+wording — only their register:
     - (snacks) "Being first to bring fermented-yeast protein to India, 10g of clean protein a \
 bite with no added sugar, is a genuinely hard thing to pull off, and SUPERYOU has."
     - (logistics) "Keeping 40+ countries of distribution running as tightly as MASA has over 21 \
@@ -119,7 +153,9 @@ people on the team, never about the company's core business process.
 Rules:
 - Output ONLY the two paragraphs, separated by a single blank line. No greeting, sign-off, \
 subject, labels, bullets, markdown, or quotes.
-- Each paragraph is about two lines (roughly 25-40 words).
+- Paragraph 1 is EXACTLY two sentences TOTALING 50 to 60 words (aim ~55; both sentences \
+substantial; never fewer unless facts are too sparse; hard cap 60 words / two sentences); \
+paragraph 2 stays tight (about two to three lines, 35-55 words).
 - Use ONLY the facts provided; never invent numbers, funding, customers, product claims, or \
 events, and NEVER guess what the company does from its name or domain. If facts are thin, keep \
 paragraph 1 to what is genuinely given without fabricating.
@@ -196,10 +232,38 @@ def generate_personalization(client, lead: Lead) -> str:
     """One cheap Claude (Haiku) call, NO web search: the two-paragraph block for
     `lead`, built from the Apollo facts already on the lead."""
     resp = client.messages.create(
-        model=OPENER_MODEL, max_tokens=400, system=PERSONALIZE_SYSTEM,
+        model=OPENER_MODEL, max_tokens=512, system=PERSONALIZE_SYSTEM,
         messages=[{"role": "user", "content": _prompt(lead)}],
     )
     return _clean_block(next((b.text for b in resp.content if b.type == "text"), ""))
+
+
+def _groq_block(lead: Lead) -> str:
+    """The two-paragraph block via Groq's OpenAI-compatible chat API — used when
+    GROQ_API_KEY is set. Same prompt and same output guards as the Claude path, so
+    a refusal / off-format reply is still dropped by _clean_block."""
+    import requests
+    r = requests.post(
+        GROQ_URL,
+        headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}",
+                 "Content-Type": "application/json"},
+        json={"model": GROQ_MODEL, "max_tokens": 512, "temperature": 0.7,
+              "messages": [{"role": "system", "content": PERSONALIZE_SYSTEM},
+                           {"role": "user", "content": _prompt(lead)}]},
+        timeout=45)
+    r.raise_for_status()
+    content = ((r.json().get("choices") or [{}])[0]
+               .get("message", {}).get("content", "") or "")
+    return _clean_block(content)
+
+
+def _write_intro(lead: Lead) -> str:
+    """Write the two-paragraph intro with whichever provider is configured: Groq
+    when GROQ_API_KEY is set, otherwise Anthropic (Claude)."""
+    if os.environ.get("GROQ_API_KEY"):
+        return _groq_block(lead)
+    import anthropic
+    return generate_personalization(anthropic.Anthropic(), lead)
 
 
 def ensure_personalization(db, lead) -> str:
@@ -220,7 +284,8 @@ def ensure_personalization(db, lead) -> str:
             db.commit()
         except Exception:
             db.rollback()
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not (os.environ.get("GROQ_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")):
         return ""
     try:
         # If this lead arrived without brand facts (Sent-folder recovery, a bare
@@ -250,9 +315,7 @@ def ensure_personalization(db, lead) -> str:
             except Exception:
                 db.rollback()
             return ""
-        import anthropic
-        client = anthropic.Anthropic()
-        block = generate_personalization(client, lead)   # Haiku, from Apollo facts
+        block = _write_intro(lead)   # Groq if GROQ_API_KEY set, else Claude
     except Exception as e:
         # Surface the reason in the Activity feed (commit so it actually persists).
         log(db, "error", f"personalization failed for {lead.email}: {e}")
