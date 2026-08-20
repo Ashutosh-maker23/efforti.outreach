@@ -114,3 +114,8 @@ single process, app-password SMTP instead of OAuth, no open tracking
 - More mailboxes: just add them; enrollment round-robins automatically.
 - Apollo API auto-pull, per-step reply analytics, AI-personalized first
   lines: all clean extensions of the current schema.
+
+
+<!-- commands - 
+git push origin main
+git push work main -->
