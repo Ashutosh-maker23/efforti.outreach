@@ -591,7 +591,8 @@ def leads_page(request: Request, status: str = "", due: int = -1,
         db.close()
 
 
-def _apollo_filters(industries, traits, locations, size_range):
+def _apollo_filters(industries, traits, locations, size_range,
+                    size_min="", size_max=""):
     """Shared parsing for the Apollo form fields.
 
     `industries` (vertical) and `traits` (who-they-sell-to / how-they-operate)
@@ -614,7 +615,17 @@ def _apollo_filters(industries, traits, locations, size_range):
     # fintech + everything.
     kw = tags or list(DEFAULT_KEYWORDS)
     loc = [l.strip() for l in (locations or "").split(",") if l.strip()] or None
-    sizes = SIZE_PRESETS.get(size_range) or SIZE_PRESETS["startup"]
+    # 'custom' -> the operator's own headcount band (e.g. Manufacturing 40–60);
+    # otherwise a named preset, falling back to the default startup band.
+    if size_range == "custom":
+        try:
+            lo, hi = int(size_min), int(size_max)
+            lo, hi = min(lo, hi), max(lo, hi)
+            sizes = [f"{max(1, lo)},{hi}"] if hi >= 1 else SIZE_PRESETS["startup"]
+        except (TypeError, ValueError):
+            sizes = SIZE_PRESETS["startup"]
+    else:
+        sizes = SIZE_PRESETS.get(size_range) or SIZE_PRESETS["startup"]
     # Merge + de-dupe scorer hints from both pickers.
     hints, hseen = [], set()
     for h in industry_hints(ind) + trait_hints(trt):
@@ -629,6 +640,7 @@ def apollo_preview(request: Request, brands: int = Form(20),
                    per_brand: int = Form(5), industries: str = Form(""),
                    traits: str = Form(""),
                    locations: str = Form(""), size_range: str = Form("startup"),
+                   size_min: str = Form(""), size_max: str = Form(""),
                    remote_first: str = Form("")):
     """Free search-only preview: show who Apollo has, grouped by brand, before
     spending any credits. (The remote-first preference only affects scoring on
@@ -639,11 +651,13 @@ def apollo_preview(request: Request, brands: int = Form(20),
         brands = max(1, min(100, brands))
         per_brand = max(1, min(10, per_brand))
         kw, loc, sizes, _hints = _apollo_filters(industries, traits,
-                                                 locations, size_range)
+                                                 locations, size_range,
+                                                 size_min, size_max)
         preview = preview_apollo(keywords=kw, locations=loc, size_ranges=sizes,
                                  brands=brands, per_brand=per_brand)
         pf = {"industries": industries, "traits": traits,
               "locations": locations, "size_range": size_range,
+              "size_min": size_min, "size_max": size_max,
               "brands": brands, "per_brand": per_brand,
               "remote_first": (remote_first == "on")}
         return templates.TemplateResponse(request, "leads.html", _leads_ctx(
@@ -844,6 +858,7 @@ def leads_import_sent(mailbox_id: int = Form(...),
 def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
                 industries: str = Form(""), traits: str = Form(""),
                 locations: str = Form(""), size_range: str = Form("startup"),
+                size_min: str = Form(""), size_max: str = Form(""),
                 remote_first: str = Form("")):
     """Pull the top `per_brand` execs at up to `brands` companies from Apollo
     (default ICP). Enforces the per-brand cap + brand scope, and runs the same
@@ -854,7 +869,8 @@ def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
         brands = max(1, min(100, brands))
         per_brand = max(1, min(10, per_brand))
         kw, loc, sizes, hints = _apollo_filters(industries, traits,
-                                                locations, size_range)
+                                                locations, size_range,
+                                                size_min, size_max)
         s = pull_apollo(db, keywords=kw, locations=loc, size_ranges=sizes,
                         brands=brands, per_brand=per_brand, target_hints=hints,
                         prefer_remote=(remote_first == "on"))

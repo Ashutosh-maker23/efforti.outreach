@@ -21,7 +21,7 @@ import time
 
 import requests
 
-from .icp import location_match, parse_band, prescreen_org, score_lead
+from .icp import location_match, parse_band, prescreen_org, score_lead, title_tier
 from .importer import normalize_domain, verify_email
 from .models import Lead, Suppression, log
 
@@ -133,6 +133,15 @@ INDUSTRY_OPTIONS = [
     {"slug": "media", "label": "Media / Gaming / Creator",
      "tags": ["media", "gaming", "creator economy"],
      "hints": ["media", "gaming", "computer games", "entertainment"]},
+    {"slug": "manufacturing", "label": "Manufacturing / Industrial",
+     "tags": ["manufacturing", "industrial", "machinery"],
+     "hints": ["manufactur", "industrial", "machinery", "mechanical",
+               "electrical", "electronic", "automotive", "plastics",
+               "packaging", "building materials", "metals", "chemical"]},
+    {"slug": "construction", "label": "Construction / Built Environment",
+     "tags": ["construction", "building", "civil engineering"],
+     "hints": ["construction", "building materials", "civil engineering",
+               "building"]},
 ]
 _INDUSTRY_BY_SLUG = {o["slug"]: o for o in INDUSTRY_OPTIONS}
 
@@ -767,15 +776,12 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             domain_counts[l.company_domain] = domain_counts.get(
                 l.company_domain, 0) + 1
     brand_domains = {}   # domains touched THIS run -> count added this run
-
-    def _room(dom: str) -> bool:
-        """True if this domain still has capacity AND fits the brand scope."""
-        held = domain_counts.get(dom, 0) + brand_domains.get(dom, 0)
-        if held >= per_brand:
-            return False
-        if dom not in brand_domains and len(brand_domains) >= brands:
-            return False
-        return True
+    # This run's IN-POOL Lead objects per domain, so the per-brand cap can keep
+    # the highest-tier titles: when a brand is full and a stronger title arrives
+    # (e.g. a Chief of Staff after 5 lower CxOs), we demote the weakest kept exec
+    # for that brand rather than drop the stronger newcomer. len() mirrors
+    # brand_domains[domain].
+    pool_by_domain = {}
 
     def _consider(enriched: dict) -> bool:
         """Store one REVEALED person — we already paid the credit, so nothing is
@@ -820,8 +826,38 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         loc_ok, _ = location_match(locations, org_obj, enriched)
         icp = score_lead(f, org_obj, band, target_hints, prefer_remote)
         domain = normalize_domain(f["company_domain"]) or email.split("@", 1)[1]
-        room = _room(domain)
-        in_pool = loc_ok and icp["verdict"] == "pass" and room
+
+        poolable = loc_ok and icp["verdict"] == "pass"
+        # Per-brand priority: the POC title tier is the primary key (so a Chief of
+        # Staff / CEO always outranks a COO/CFO/CPO), the ICP score breaks ties.
+        # Higher = keep. This is what stops a top-tier title being dropped to
+        # off_icp just because it was revealed after the brand's slots filled.
+        prio = (title_tier(f["title"])[0], icp["score"])
+
+        # Bucket decision. A poolable lead enters the sending pool when the brand
+        # has room, OR when it outranks the weakest exec already kept for that
+        # brand THIS RUN — then we SWAP: the weaker one drops to off_icp and the
+        # stronger newcomer takes the slot. So the per-brand cap always holds the
+        # highest-tier titles, and a Chief of Staff is never bumped by a lower CxO.
+        in_pool = False
+        demoted = None
+        if poolable:
+            held = domain_counts.get(domain, 0) + brand_domains.get(domain, 0)
+            brand_scope_ok = domain in brand_domains or len(brand_domains) < brands
+            if not brand_scope_ok:
+                stats["skipped_scope"] += 1
+            elif held < per_brand:
+                in_pool = True
+            else:                              # brand full — displace the weakest?
+                kept = pool_by_domain.get(domain, [])
+                weakest = min(kept, key=lambda L: (title_tier(L.title)[0],
+                                                   L.icp_score or 0)) if kept else None
+                if weakest is not None and prio > (title_tier(weakest.title)[0],
+                                                   weakest.icp_score or 0):
+                    demoted = weakest
+                    in_pool = True
+                else:
+                    stats["skipped_brand_full"] += 1
 
         tally = stats["icp_reject_reasons"]
         if not loc_ok:
@@ -831,16 +867,19 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             stats["skipped_icp"] += 1
             why = (icp["reasons"][0] if icp["reasons"] else "?").split(":")[0]
             tally[why] = tally.get(why, 0) + 1
-        elif not room:
-            held = domain_counts.get(domain, 0) + brand_domains.get(domain, 0)
-            if held >= per_brand:
-                stats["skipped_brand_full"] += 1
-            else:
-                stats["skipped_scope"] += 1
-        elif "remote/distributed team" in icp["reasons"]:
+        elif in_pool and "remote/distributed team" in icp["reasons"]:
             stats["remote_fit"] += 1
 
-        db.add(Lead(
+        # Apply a swap: the displaced lead leaves the sending pool for off_icp.
+        if demoted is not None:
+            demoted.status = "off_icp"
+            pool_by_domain[domain].remove(demoted)
+            brand_domains[domain] = brand_domains.get(domain, 0) - 1
+            stats["imported"] -= 1
+            stats["off_icp_kept"] += 1
+            stats["skipped_brand_full"] += 1
+
+        lead = Lead(
             email=email, first_name=f["first_name"], last_name=f["last_name"],
             title=f["title"], company=f["company"], company_domain=domain,
             company_size=f["company_size"], industry=f["industry"],
@@ -849,12 +888,14 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             icp_score=icp["score"], icp_reasons="; ".join(icp["reasons"]),
             source="apollo", verify_result="ok",
             status="verified" if in_pool else "off_icp",
-        ))
+        )
+        db.add(lead)
         existing_emails.add(email)
         if apid:
             known_ids.add(apid)
         if in_pool:
             brand_domains[domain] = brand_domains.get(domain, 0) + 1
+            pool_by_domain.setdefault(domain, []).append(lead)
             stats["imported"] += 1
             return True
         stats["off_icp_kept"] += 1
@@ -909,7 +950,12 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                 if not location_match(locations, pre_org)[0]:
                     stats["skipped_location_prereveal"] += 1
                     continue
-                candidates.append(pid)
+                candidates.append((pid, title_tier(p.get("title") or "")[0]))
+            # Reveal higher-tier titles first, so a brand's slots fill with the
+            # most senior people even when the reveal budget or target caps the run
+            # mid-brand (a Chief of Staff / CEO is revealed before a lower CxO).
+            candidates.sort(key=lambda c: c[1], reverse=True)
+            candidates = [pid for pid, _ in candidates]
             stats["no_email"] += sum(1 for p in people if not p.get("has_email"))
             db.commit()          # persist this page's free identity backfills
             imported_before_page = stats["imported"]

@@ -298,21 +298,26 @@ def funding_signal(org: dict) -> tuple:
 def _classify_industry(industry: str, extra_targets=None) -> str:
     """'target' / 'smb' / 'blocked' / 'neutral' / 'unknown'. `extra_targets` are
     the industry hint substrings from the user's dropdown selection — a match
-    promotes an otherwise-neutral industry to 'target', so selecting "Logistics"
-    or "HR Tech" genuinely tightens scoring, not just the search. Institutional
-    blocks and SMB penalties still win over a hint (we never want a hospital,
-    even if the user picked HealthTech)."""
+    promotes the industry to 'target', so an explicit pick (Manufacturing,
+    Construction, Logistics, HR Tech...) tightens scoring, not just the search,
+    and WINS over the traditional-SMB penalty — deliberately choosing a vertical
+    means you want it. Hard institutional blocks still win over a hint (we never
+    want a hospital, even if the user picked HealthTech)."""
     ind = (industry or "").strip().lower()
     if not ind:
         return "unknown"
     if ind in BLOCKED_INDUSTRIES:
         return "blocked"
+    # An EXPLICIT dropdown pick beats the SMB penalty (but never a hard block):
+    # a company matching the chosen vertical is on-target even when its Apollo
+    # industry ("construction", "machinery", "building materials"...) otherwise
+    # sits in the traditional-SMB list.
+    if extra_targets and any(h and h in ind for h in extra_targets):
+        return "target"
     if ind in SMB_INDUSTRIES:
         return "smb"
     if ind in TARGET_INDUSTRIES or any(h in ind
                                        for h in TARGET_INDUSTRY_HINTS):
-        return "target"
-    if extra_targets and any(h and h in ind for h in extra_targets):
         return "target"
     return "neutral"
 

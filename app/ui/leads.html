@@ -142,13 +142,27 @@
         </div>
       </div>
       <label style="margin-top:12px">Company size</label>
-      <select name="size_range">
-        <option value="seed">Seed (1–20)</option>
-        <option value="startup" selected>Startup (21–200) · default ICP</option>
-        <option value="growth">Growth (201–1,000)</option>
-        <option value="midmarket">Mid-market (1,000–5,000)</option>
-        <option value="any">Any size</option>
+      {% set szr = preview_filters.size_range if preview_filters is defined else 'startup' %}
+      <select name="size_range" id="apSize">
+        <option value="seed"{{ ' selected' if szr=='seed' }}>Seed (1–20)</option>
+        <option value="startup"{{ ' selected' if szr=='startup' or not szr }}>Startup (21–200) · default ICP</option>
+        <option value="growth"{{ ' selected' if szr=='growth' }}>Growth (201–1,000)</option>
+        <option value="midmarket"{{ ' selected' if szr=='midmarket' }}>Mid-market (1,000–5,000)</option>
+        <option value="any"{{ ' selected' if szr=='any' }}>Any size</option>
+        <option value="custom"{{ ' selected' if szr=='custom' }}>Custom headcount…</option>
       </select>
+      <div id="apSizeCustom" style="display:{{ 'flex' if szr=='custom' else 'none' }};gap:12px;margin-top:10px">
+        <div style="flex:1">
+          <label style="margin-top:0">Min people</label>
+          <input type="number" name="size_min" id="apSizeMin" min="1" max="100000"
+                 value="{{ preview_filters.size_min if (preview_filters is defined and preview_filters.size_min) else '40' }}">
+        </div>
+        <div style="flex:1">
+          <label style="margin-top:0">Max people</label>
+          <input type="number" name="size_max" id="apSizeMax" min="1" max="100000"
+                 value="{{ preview_filters.size_max if (preview_filters is defined and preview_filters.size_max) else '60' }}">
+        </div>
+      </div>
       {% set selind = preview_filters.industries.split(',') if (preview_filters is defined and preview_filters.industries) else [] %}
       <label style="margin-top:12px">Industry focus <span class="muted">(pick one or more — drives the Apollo search <em>and</em> the ICP score)</span></label>
       <div class="msel" id="indMsel">
@@ -199,6 +213,12 @@
         function upd(){var n=(+b.value||0)*(+p.value||0);
           s.textContent='up to '+n+' exec'+(n===1?'':'s');}
         b.addEventListener('input',upd);p.addEventListener('input',upd);upd();
+
+        // Show the Min/Max people inputs only when "Custom headcount" is picked.
+        var szSel=document.getElementById('apSize'),
+            szCustom=document.getElementById('apSizeCustom');
+        function szToggle(){szCustom.style.display=(szSel.value==='custom')?'flex':'none';}
+        szSel.addEventListener('change',szToggle);szToggle();
 
         // Reusable multi-select wiring — drives BOTH the Industry and the
         // Company-traits pickers. Each maps its checkboxes -> a hidden field +
