@@ -8,6 +8,52 @@
 </div>
 
 <div class="card" style="margin-bottom:24px">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <h2 style="margin:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M4 8h16M8 12h8M8 16h5"/></svg>First-touch mailers <span class="muted" style="font-weight:400">— the 8 variants you pick from on the Leads page</span></h2>
+    <select id="mailerView" style="width:auto;min-width:300px;margin:0">
+      {% for group_label, items in mailers %}
+      <optgroup label="{{group_label}}">
+        {% for m in items %}<option value="{{m.slug}}"{{ ' selected' if selected_mailer == m.slug }}>{{group_label}} · {{m.label}}</option>{% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+  </div>
+  <p class="muted" style="font-size:12px;margin:10px 0 0">These are the cold first-emails. On the <a href="/leads">Leads</a> page, pick one in the <strong>Mailer</strong> selector to send it as the first touch — O&amp;M for O&amp;M leads, Construction/EPC for EPC leads. <strong>Edit any of them below and Save</strong> — the saved copy is exactly what gets sent. Each goes out with the recipient's first name in the subject, so every email is its own separate thread.</p>
+  {% if mailer_saved %}
+  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-top:14px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong style="color:var(--ok)">Mailer saved.</strong> This version is what will be sent from now on.</span>
+  </div>
+  {% endif %}
+
+  {% for group_label, items in mailers %}
+    {% for m in items %}
+    <form method="post" action="/sequences/mailer/{{m.slug}}" class="mailer-view" data-slug="{{m.slug}}" style="display:none;margin-top:16px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <span class="tag verified" style="font-size:12px;padding:4px 11px">{{group_label}}</span>
+        <span class="muted">{{m.label}}</span>
+      </div>
+      <label style="margin-top:0">Subject <span class="muted">(sent as “{{'{{first_name}}'}}, &lt;your subject&gt;” — the first name keeps each email a separate thread)</span></label>
+      <input type="text" name="subject" value="{{m.subject}}">
+      <label>Body <span class="muted">(token: <code>{{'{{first_name}}'}}</code>)</span></label>
+      <textarea name="body" rows="13">{{m.body}}</textarea>
+      <div style="margin-top:16px"><button class="btn sm">Save mailer</button></div>
+    </form>
+    {% endfor %}
+  {% endfor %}
+</div>
+<script>
+  (function(){
+    var sel=document.getElementById('mailerView');
+    if(!sel)return;
+    var panels=Array.prototype.slice.call(document.querySelectorAll('.mailer-view'));
+    function show(){panels.forEach(function(p){
+      p.style.display=(p.getAttribute('data-slug')===sel.value)?'block':'none';});}
+    sel.addEventListener('change',show);show();
+  })();
+</script>
+
+<div class="card" style="margin-bottom:24px">
   <h2 style="margin-top:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Follow-up cadence</h2>
   <p class="muted" style="margin-bottom:4px">How many <strong style="color:var(--text)">working days</strong> (Mon–Fri) to wait before each follow-up. Weekends never count toward a gap and no email is ever sent on a Sat/Sun, so the sequence stays inside the week. This applies the same gap to every follow-up touch — currently <strong style="color:var(--text)">every {{cadence}} working days</strong>. The default sequence is spaced 3, 4, 5, 4 (touches on working days 3, 7, 12, 16); use this only to flatten it to a single gap.</p>
   <form method="post" action="/sequences/followup_gap" style="display:flex;align-items:flex-end;gap:12px;margin-top:14px">

@@ -20,7 +20,9 @@ from email.header import decode_header, make_header
 
 from .emailer import send
 from .enrich import ensure_personalization
+from .mailers import mailer_content
 from .models import (Enrollment, Event, Lead, Mailbox, Message, Reply,
+                     claim_send_slot, release_stale_claims,
                      SessionLocal, Suppression, log, utcnow)
 
 BUSINESS_START = int(os.environ.get("BUSINESS_HOUR_START", "9"))
@@ -145,6 +147,7 @@ def _do_sends(db, now, manual: bool):
     manual=False (the background scheduler): the original throttled behaviour.
     """
     today = now.strftime("%Y-%m-%d")
+    release_stale_claims(db)     # free any slot stranded by a crash mid-SMTP
     batch = 1000 if manual else 50
     due = (db.query(Enrollment)
            .filter(Enrollment.status == "active",
@@ -187,16 +190,16 @@ def _do_sends(db, now, manual: bool):
             continue
         step = steps[enr.current_step]
 
-        # Idempotency: never send a step this lead has already RECEIVED. A lead
-        # can accumulate more than one active enrollment (a double-click or a
-        # race in _ensure_enrollment opens a second thread), and each would
-        # otherwise fire the opener again — that is how a recipient got the same
-        # first email two or three times. If a 'sent' message already exists for
-        # this (lead, step), advance past it and skip instead of re-sending.
-        if db.query(Message).filter(
-                Message.lead_email == lead.email,
-                Message.step_index == enr.current_step,
-                Message.status == "sent").first():
+        # CLAIM the (lead, step) slot before doing anything expensive. A lead
+        # can hold more than one active enrollment (a double-click opens a second
+        # thread), and the personalization + SMTP round-trip below takes long
+        # enough that a manual send or the next tick used to start inside it and
+        # deliver the same email again. The claim is a committed, uniquely
+        # indexed row: exactly one sender can hold it, so the others skip here
+        # instead of sending. Losing the claim means it is already handled.
+        claim = claim_send_slot(db, enr.id, lead.email, mailbox.email,
+                                enr.current_step)
+        if claim is None:
             enr.current_step += 1
             if enr.current_step >= len(steps):
                 enr.status = "finished"
@@ -214,7 +217,7 @@ def _do_sends(db, now, manual: bool):
             ensure_personalization(db, lead)
 
         ok = send(db, mailbox, lead, enr, step.subject, step.body,
-                  enr.current_step)
+                  enr.current_step, record=claim)
         if ok:
             mailbox.sent_today += 1
             mailbox.sends_7d += 1
@@ -233,6 +236,14 @@ def _do_sends(db, now, manual: bool):
         else:
             enr.next_send_at = now + timedelta(hours=6)  # retry later
             stats["failed"] += 1
+        # Commit per send. The email has already left the building, so its record
+        # must be durable NOW — batching the commit to the end meant one failure
+        # late in the loop rolled back every earlier row while those emails stayed
+        # delivered, which silently re-armed them for a re-send on the next tick.
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
     db.commit()
     return stats
 
@@ -264,10 +275,12 @@ def process_due_sends():
         db.close()
 
 
-def send_enrollment_step(db, enr, step_index, cc=None, bcc=None):
+def send_enrollment_step(db, enr, step_index, cc=None, bcc=None, mailer=None):
     """Send ONE specific step for one enrollment, right now. This powers the
     per-lead 'Send first email' / 'Send follow-up N' buttons and the
-    'send to selected' action. Returns a short status string:
+    'send to selected' action. `mailer` is the chosen first-touch variant slug
+    (app/mailers.py) — on a step-0 send its subject/body REPLACE the sequence's
+    step-0 content; it is ignored for follow-ups. Returns a short status string:
 
       sent · stopped (replied/bounced/opted out) · no_mailbox · out_of_order
       (that step isn't this lead's next one) · done (whole sequence finished) ·
@@ -291,14 +304,12 @@ def send_enrollment_step(db, enr, step_index, cc=None, bcc=None):
         return "done"
     if step_index != enr.current_step:
         return "out_of_order"
-    # Idempotency: if this step has already been sent to this lead (a duplicate
-    # enrollment, or a double-click on the button), do NOT send it again —
-    # advance past it and report it as already handled. This is the guard that
-    # stops a lead from getting the same opener or follow-up twice.
+    # Fast pre-check so an obvious repeat costs nothing. This is NOT the real
+    # guard — the committed claim taken below is (see models.claim_send_slot).
     if db.query(Message).filter(
             Message.lead_email == lead.email,
             Message.step_index == step_index,
-            Message.status == "sent").first():
+            Message.status.in_(("sent", "sending"))).first():
         enr.current_step = step_index + 1
         if enr.current_step >= len(steps):
             enr.status = "finished"
@@ -318,13 +329,36 @@ def send_enrollment_step(db, enr, step_index, cc=None, bcc=None):
             and now.date() < enr.next_send_at.date()):
         return "too_early"
     roll_daily_counters(db, mailbox, today)   # keep the "sent today" tally fresh
+    # THE guard. Claim (lead, step) and commit before the personalization call
+    # and the SMTP round-trip, so a second click or the background tick starting
+    # inside that window cannot also deliver it.
+    claim = claim_send_slot(db, enr.id, lead.email, mailbox.email, step_index)
+    if claim is None:
+        enr.current_step = step_index + 1
+        if enr.current_step >= len(steps):
+            enr.status = "finished"
+            if lead.status == "contacted":
+                lead.status = "finished"
+        else:
+            enr.next_send_at = add_business_days(
+                now, steps[enr.current_step].wait_days)
+        return "already_sent"
     step = steps[step_index]
-    # Primary email only: research the company and write the brand-specific intro
-    # before sending (cached on the lead, so re-sends and follow-ups don't re-run).
-    if step_index == 0:
+    subject, body = step.subject, step.body
+    # First-touch variant: if the operator chose a mailer for this step-0 send,
+    # its subject/body REPLACE the sequence's step-0 content (its subject becomes
+    # the thread subject that every follow-up then replies under).
+    if step_index == 0 and mailer:
+        override = mailer_content(db, mailer)
+        if override:
+            subject, body = override
+    # Primary email only, and only when the copy actually uses {{personalization}}:
+    # research the company and write the brand-specific intro (cached on the lead).
+    # The 8 variants are self-contained (no token), so they skip the AI call.
+    if step_index == 0 and "personalization" in (body or ""):
         ensure_personalization(db, lead)
-    if not send(db, mailbox, lead, enr, step.subject, step.body, step_index,
-                cc=cc, bcc=bcc):
+    if not send(db, mailbox, lead, enr, subject, body, step_index,
+                cc=cc, bcc=bcc, record=claim):
         return "failed"
     mailbox.sent_today += 1
     mailbox.sends_7d += 1

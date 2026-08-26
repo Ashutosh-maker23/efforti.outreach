@@ -23,72 +23,57 @@ from .models import Enrollment, Sequence, SequenceStep, log
 
 # Bump this name whenever the canonical copy changes so a fresh version seeds
 # cleanly and becomes the single active default (older ones are retired below).
-SEQUENCE_NAME = "Efforti CEO cold sequence v8"
+SEQUENCE_NAME = "Efforti field-report cold sequence v11"
 
 # ── Email 1 · Day 0 · opens the thread ──────────────────────────────────────
-# Subjects on the thread-opening steps (0, 2, 4) carry {{first_name}} so each
-# recipient gets a UNIQUE subject line. Same-brand execs no longer collapse into
-# one Gmail conversation — every person is a clean, separate thread — and a
-# per-recipient subject is also better for deliverability than a mass-identical one.
-STEP_0_SUBJECT = "{{first_name}}, who's blocked at {{company}} right now?"
-# Manager alternates: "the question no dashboard answers" · "9:12 am at {{company}}"
+# This step-0 subject/body is only a NEUTRAL FALLBACK. Normally the operator
+# picks one of the 8 first-touch variants (see app/mailers.py) from the Leads
+# page "Mailer" selector, and that variant's subject + body REPLACE this at send
+# time (scheduler.send_enrollment_step). Kept niche-neutral so a variant-less
+# send still reads on-message. No {{personalization}} token — the variants are
+# self-contained, so no AI intro is generated for the first touch.
+STEP_0_SUBJECT = "{{first_name}}, every site by 9am"
 STEP_0_BODY = """Hi {{first_name}},
-{{personalization}}
-If I asked you right now, who on your team has been blocked the longest, and on what, could you answer without calling a meeting or pinging three managers?
 
-Most leaders can't. Not because they lack dashboards, but because dashboards only know what someone typed into a tracker, and most real work never gets typed in.
+Efforti collects every site's update by 9am. Each site in-charge just replies to one message, nothing to install, nothing to learn. Sites that go quiet get chased automatically, and you open one compiled report you can actually question, answered in your team's own words.
 
-Efforti gets the answer differently: it asks your people. A 3-minute check-in in chat each morning, read by AI, returned to you as one brief: who's on track, who's stuck and for how long, who's gone quiet.
-
-Worth 20 minutes this week?
+Taking 5 founding pilots this month: 30 days, one region or cluster, we handle the chasing. Worth 20 minutes?
 
 P.S. Prefer to poke at it yourself first? agents.efforti.com. First team live in ~15 minutes, no integrations."""
 
 # ── Email 2 · Working day 3 · reply in email 1's thread (blank subject) ─────
+# Follow-ups are niche-NEUTRAL (they work after any O&M or EPC first touch) and
+# intentionally short. Edit freely in the Sequences UI.
 STEP_1_BODY = """Hi {{first_name}},
 
-A manager using Efforti told us: "I haven't run a status meeting in weeks, and I've never had a clearer picture of my team."
+Following up on this. The whole idea is that your field teams don't have to learn anything. Each site just replies to one message the way they already text you, and by 9am you have every site's update in one report you can question line by line. Silent sites get chased for you.
 
-What changed: his team answers a 3-minute check-in in chat each morning. Efforti reads every reply, ranks blockers by how long they've been waiting, nudges the quiet ones, and hands him the summary before his first call. The Monday status meeting simply stopped being necessary. Roughly 10 hours a week back on a 10-person team.
-
-Setup took 15 minutes. No Jira cleanup, no new tool for the team to learn.
-
-Want to see it on your own team's rhythm? I could do a quick 20 minutes this week or next."""
+Worth 20 minutes to see it on your sites?"""
 
 # ── Email 3 · Working day 7 · reply in the opener's thread (blank subject) ──
 STEP_2_SUBJECT = ""
 STEP_2_BODY = """Hi {{first_name}},
 
-Quick math on one 10-person team running a daily standup: 15 minutes × 10 people × 5 days = 12.5 hours a week spent reporting work instead of moving it.
+Most site-reporting tools die because the field team won't use them. Efforti has nothing for them to install; they just reply to a message. You still get every site by 9am, and the report tells you not just what's behind but why, in the site team's own words.
 
-Efforti's async check-ins collect the same truth in about 3 minutes per person, and catch what the meeting doesn't: the blocker nobody raises in front of the room, and the teammate who's quietly disengaging.
-
-That's ~10 hours back per team, every week. Across your teams at {{company}}, you can do the multiplication.
-
-Should I send over a two-week pilot plan? Zero cost, no integration, and you keep your numbers either way."""
+Happy to walk you through it in 20 minutes this week or next."""
 
 # ── Email 4 · Working day 12 · reply in email 3's thread (blank subject) ────
 STEP_3_BODY = """Hi {{first_name}},
 
-Last thought from me on this: the most expensive thing in delivery is rarely the work. It's the wait. Blockers sit for days because raising them means interrupting someone senior, and by the time they surface in a Friday review, the sprint has already slipped.
+One more angle: the report is something you can argue with. Drill into any line ("why is that site behind this week?") and you get the answer from the people actually on the ground, not a status colour.
 
-Efforti chases blockers the way a good chief of staff would: logs them from the daily check-in, tags the owner, follows up until resolved, and escalates with "waiting 3 days" attached, so nothing hides.
-
-We hold our pilots to a measurable bar: at least one blocker caught early in two weeks, or you don't expand. That's the deal.
-
-20 minutes to see your team's version of that radar?"""
+We run 5 founding pilots a month: 30 days, one region or cluster, we do the chasing. Want one of the slots?"""
 
 # ── Email 5 · Working day 16 · reply in the opener's thread (blank subject) ──
 STEP_4_SUBJECT = ""
 STEP_4_BODY = """Hi {{first_name}},
 
-I'll close the loop here. You're busy running {{company}}, and unanswered emails are their own kind of blocker.
+I'll close the loop here.
 
-Two things before I go.
+You can try it yourself at agents.efforti.com. A check-in for your first team is live in ~15 minutes, no integrations.
 
-First: the product is self-serve at agents.efforti.com. A check-in agent for your first team is live in ~15 minutes, and the dashboard fills the same morning. If execution visibility becomes a priority next quarter, that link is the fastest proof you'll find.
-
-Second: if it's simply "not now," reply with a month, "Nov" is enough, and I'll come back exactly then. Not before.
+Or if it's simply "not now," reply with a month ("Nov" is enough) and I'll come back exactly then. Not before.
 
 Thanks for reading, and good luck with the quarter."""
 

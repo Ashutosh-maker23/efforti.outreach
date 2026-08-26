@@ -116,6 +116,5 @@ single process, app-password SMTP instead of OAuth, no open tracking
   lines: all clean extensions of the current schema.
 
 
-<!-- commands - 
-git push origin main
-git push work main -->
+<!-- <!-- commands - 
+git push origin main && git push work main && git push org main -->

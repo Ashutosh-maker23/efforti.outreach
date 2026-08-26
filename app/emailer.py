@@ -265,17 +265,26 @@ def build_email(mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
 
 def send(db, mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
          subject_tpl: str, body_tpl: str, step_index: int,
-         cc: list = None, bcc: list = None) -> bool:
+         cc: list = None, bcc: list = None, record=None) -> bool:
+    """Deliver one step. `record` is the Message row the caller already CLAIMED
+    via models.claim_send_slot — holding it is what guarantees no other sender
+    can deliver this same (lead, step). It is filled in and flipped to
+    sent/failed here. Passing None keeps the old behaviour for any caller that
+    does not need the guard."""
     subject = render(subject_tpl, lead) if subject_tpl else ""
     body = render(body_tpl, lead)
     msg, msg_id = build_email(mailbox, lead, enrollment, subject, body,
                               cc=cc, bcc=bcc)
 
-    record = Message(
-        enrollment_id=enrollment.id, lead_email=lead.email,
-        mailbox_email=mailbox.email, step_index=step_index,
-        subject=msg["Subject"], body=body, message_id=msg_id,
-    )
+    if record is None:
+        record = Message(
+            enrollment_id=enrollment.id, lead_email=lead.email,
+            mailbox_email=mailbox.email, step_index=step_index,
+        )
+        db.add(record)
+    record.subject = msg["Subject"]
+    record.body = body
+    record.message_id = msg_id
 
     try:
         with smtplib.SMTP(mailbox.smtp_host, mailbox.smtp_port, timeout=30) as s:
@@ -286,7 +295,6 @@ def send(db, mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
             s.login(mailbox.login_email(), mailbox.app_password)
             s.send_message(msg)      # envelope includes Cc + Bcc; Bcc header stripped
         record.status = "sent"
-        db.add(record)
         extra = ""
         if cc:
             extra += f" cc:{','.join(cc)}"
@@ -296,7 +304,7 @@ def send(db, mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
                         f"{extra}")
         return True
     except Exception as e:
+        # 'failed' also RELEASES the claim, so a retry can take the slot.
         record.status = "failed"
-        db.add(record)
         log(db, "error", f"send failed -> {lead.email}: {e}")
         return False

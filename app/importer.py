@@ -299,11 +299,19 @@ def import_from_sent(db, mailbox, since_imap: str, before_imap: str,
                                  created_at=sent_at or utcnow())
                 db.add(enr)
                 db.flush()
-                db.add(Message(enrollment_id=enr.id, lead_email=addr,
-                               mailbox_email=mailbox.email, step_index=0,
-                               subject=subject, body="(sent outside the app)",
-                               message_id=orig_mid, status="sent",
-                               sent_at=sent_at or utcnow()))
+                # Only record the opener if no live claim exists for
+                # (addr, step 0) — the unique send-claim index would reject a
+                # second one, and an opener this lead already has must not be
+                # logged twice either.
+                if not db.query(Message).filter(
+                        Message.lead_email == addr, Message.step_index == 0,
+                        Message.status.in_(("sent", "sending"))).first():
+                    db.add(Message(enrollment_id=enr.id, lead_email=addr,
+                                   mailbox_email=mailbox.email, step_index=0,
+                                   subject=subject,
+                                   body="(sent outside the app)",
+                                   message_id=orig_mid, status="sent",
+                                   sent_at=sent_at or utcnow()))
                 existing.add(addr)
                 stats["imported"] += 1
         imap.logout()

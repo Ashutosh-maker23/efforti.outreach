@@ -1,45 +1,44 @@
-"""ICP extraction — decide whether a revealed contact actually fits Efforti's
-ICP, and score how well.
+"""ICP scoring & gating — rebuilt for Efforti's REAL buyer.
 
-The ICP is "CEO / Founder / Chief of Staff at 30–200-person funded startups".
-Apollo's search can express titles/seniority/headcount buckets, but NOT
-"startup" — a 50-person restaurant group and a 50-person funded SaaS both have
-a CEO and pass the same search. The reveal, however, returns the real company
-(industry, headcount, blurb, keywords, funding, founded year). This module
-turns those facts into a transparent verdict:
+The old ICP selected for "small funded Western SaaS startup, sell to the CEO" and
+hard-rejected the people who actually reply. This rebuild targets the profile our
+own positive replies proved:
 
-  score_lead(fields, org, band) -> {"score": 0-100, "verdict": "pass"/"reject",
-                                    "reasons": [...], "trigger": "raised ..."}
+    Engineering / delivery / program / IT leaders at SCALED companies —
+    Indian tech product firms, IT-services / consulting / outsourcing, Global
+    Capability Centers (GCCs), BFSI (banking / financial services / insurance /
+    fintech), and engineering-heavy manufacturing (semiconductors / electronics
+    like Tata Electronics). Size ~50 to many thousands. Primary HQ India, with
+    US / UK / Philippines / China diversification.
 
-Hard rejects (never importable): free-mail "company" domains, institutional
-industries (government/schools/hospitals...), public companies, stale titles
-(Former/Ex-/Fractional...), headcount wildly outside the requested band.
-Everything else is scored on startup signals — funding, founded year, product
-keywords, target industry, in-band headcount, buyer-role title — and imported
-only at/above ICP_MIN_SCORE (env, default 55). The score and its reasons are
-stored on the Lead so the UI can rank sends best-fit-first and show *why*.
+What changed vs the old logic (the bugs that killed the campaign):
+  • NO hard-reject on large headcount — Tata-scale is IN scope now, not nuked.
+  • NO public-company hard-reject — big IT-services / BFSI firms are listed.
+  • NO funding / founded-year "startup" bias, NO remote-first thesis.
+  • Title tiers REWARD the real buyer: CxO AND VP/Head/Director/Manager of
+    Engineering / Delivery / Program / Product / IT (the old code penalised
+    these −12/−28; they are exactly who books the demo).
+  • Target industries are the ICP verticals above, not generic Western SaaS.
 
-`prescreen_org()` is the free version of the same idea: it runs on obfuscated
-search previews (which sometimes carry industry / ticker) so unambiguous
-non-fits are dropped BEFORE a reveal credit is spent on them.
-
-`location_match()` is a SEPARATE, genuine location gate. Apollo's api_search
-honours `organization_locations` loosely — companies merely *operating* in a
-region (a sales office, a remote hire) come back for an HQ-in-India search — so
-picking "India" still leaks overseas brands. This checks the REVEALED
-company's real HQ (country/state/city/address, with the person's own location
-as a fallback) against the requested locations and drops the ones that don't
-actually match.
+Entry points (unchanged shape — the "keep the scoring mechanism" contract):
+  score_lead(fields, org, band, extra_targets=None)
+      -> {"score": 0-100, "verdict": "pass"/"reject", "reasons": [...],
+          "trigger": "..."}
+  title_tier(title)  -> (score_delta, reason)
+  prescreen_org(org) -> (ok, reason)            # FREE pre-reveal gate
+  location_match(locations, org, person=None) -> (ok, detail)   # genuine HQ gate
+  parse_band(size_ranges) -> (min, max)
+  build_niche(slugs, hints_by_slug) -> [spec, ...]   # Industry-focus gate
+  niche_prescreen(org, specs) -> bool                # FREE pre-reveal gate
 """
 import os
 import re
-from datetime import datetime
 
 # ---------------------------------------------------------------- constants
 
 # Free-mail providers: an exec whose only address is @gmail.com is a solo/tiny
-# operation, not a 30–200 startup — and free-mail "company domains" also break
-# the per-brand grouping.
+# operation, not a scaled org — and free-mail "company domains" also break the
+# per-brand grouping. Hard reject.
 FREE_MAIL_EXACT = {
     "gmail.com", "googlemail.com", "ymail.com", "msn.com", "aol.com",
     "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com",
@@ -48,186 +47,191 @@ FREE_MAIL_EXACT = {
 FREE_MAIL_PREFIXES = ("yahoo.", "hotmail.", "outlook.", "live.", "gmx.",
                       "yandex.")
 
-# Institutional industries — never the buyer for an AI leadership assistant,
+# Institutional / civic industries — never the buyer for a team-delivery tool,
 # whatever the other signals say. Hard reject.
 BLOCKED_INDUSTRIES = {
     "government administration", "government relations", "public policy",
-    "political organization", "military", "law enforcement", "judiciary",
-    "international affairs", "religious institutions",
-    "primary/secondary education", "higher education", "education management",
-    "hospital & health care", "medical practice", "mental health care",
-    "veterinary", "museums & institutions", "performing arts", "fine art",
-    "libraries", "civic & social organization",
-    "non-profit organization management", "philanthropy", "fund-raising",
+    "political organization", "legislative office", "military",
+    "law enforcement", "judiciary", "international affairs",
+    "religious institutions", "primary/secondary education",
+    "higher education", "education management", "hospital & health care",
+    "medical practice", "mental health care", "veterinary",
+    "museums & institutions", "performing arts", "fine art", "libraries",
+    "civic & social organization", "non-profit organization management",
+    "philanthropy", "fund-raising", "individual & family services",
 }
 
-# Classic small-business industries — a 50-person firm here is almost always a
-# traditional SMB, not a startup. Heavy penalty rather than a hard reject, so a
-# genuinely funded/young/product-led outlier can still climb over the bar.
-SMB_INDUSTRIES = {
+# Traditional, non-technical SMB verticals — a company here is almost never an
+# engineering/delivery org with the pain Efforti solves. Penalty (not a hard
+# reject), and an EXPLICIT industry pick (extra_targets) overrides it, so a
+# genuinely tech-led outlier in one of these can still climb over the bar.
+# NOTE (vs old code): manufacturing / machinery / engineering / electronics were
+# REMOVED from here — for this ICP those are on-target, not SMB noise.
+OFF_ICP_INDUSTRIES = {
     "restaurants", "food & beverages", "food production", "retail",
-    "supermarkets", "construction", "real estate", "automotive", "farming",
-    "ranching", "fishery", "dairy", "wholesale", "import & export",
-    "apparel & fashion", "textiles", "furniture", "machinery",
-    "building materials", "law practice", "legal services", "accounting",
-    "insurance", "banking", "hospitality", "leisure, travel & tourism",
-    "gambling & casinos", "sports", "wine & spirits", "events services",
-    "transportation/trucking/railroad", "warehousing", "oil & energy",
-    "mining & metals", "utilities", "chemicals", "paper & forest products",
-    "printing", "facilities services", "security & investigations",
+    "supermarkets", "consumer goods", "consumer services", "real estate",
+    "farming", "ranching", "fishery", "dairy", "wholesale",
+    "building materials", "glass, ceramics & concrete",
+    "mining & metals", "oil & energy", "paper & forest products",
+    "packaging & containers",
+    "apparel & fashion", "textiles", "furniture", "cosmetics",
+    "luxury goods & jewelry", "sporting goods", "tobacco", "wine & spirits",
+    "law practice", "legal services", "accounting", "hospitality",
+    "leisure, travel & tourism", "gambling & casinos", "sports",
+    "events services", "recreational facilities & services", "photography",
+    "arts & crafts", "printing",
+    "security & investigations", "staffing & recruiting", "human resources",
 }
 
-# Tech-forward industries where Efforti's buyer overwhelmingly lives.
+# The REAL ICP verticals. Exact Apollo industry strings we count as on-target.
 TARGET_INDUSTRIES = {
-    "computer software", "information technology & services", "internet",
-    "computer & network security", "financial services",
-    "marketing & advertising", "e-learning", "computer games",
-    "information services",
+    "information technology & services", "computer software", "internet",
+    "computer & network security", "computer hardware", "semiconductors",
+    "telecommunications", "financial services", "banking", "insurance",
+    "investment management", "investment banking", "capital markets",
+    "venture capital & private equity", "mechanical or industrial engineering",
+    "industrial automation", "electrical/electronic manufacturing",
+    "consumer electronics", "automotive", "aviation & aerospace",
+    "defense & space", "pharmaceuticals", "biotechnology", "medical devices",
+    "e-learning", "computer games", "information services",
+    "outsourcing/offshoring", "management consulting",
+    "logistics & supply chain", "wireless", "nanotechnology",
+    "renewables & environment", "utilities",
 }
-# Substring fallback — Apollo industry strings drift ("software development").
-TARGET_INDUSTRY_HINTS = ("software", "information technology", "internet",
-                         "saas", "fintech")
+# Substring fallback — Apollo industry strings drift ("software development",
+# "it services", "fintech", "financial technology"…). These match the REVEALED
+# industry loosely so a vertical still counts even when the exact string differs.
+TARGET_INDUSTRY_HINTS = (
+    "software", "information technology", "it services", "internet", "saas",
+    "fintech", "financial", "bank", "insur", "payment", "semiconductor",
+    "electronic", "hardware", "telecom", "wireless", "network", "security",
+    "cyber", "engineering", "industrial", "manufactur", "machinery",
+    "automation", "automotive", "aerospace", "pharma", "biotech",
+    "life science", "analytics", "artificial intelligence", "machine learning",
+    "cloud", "devops", "data", "outsourcing", "offshoring", "consulting",
+    "logistics", "supply chain", "e-commerce", "ecommerce", "marketplace",
+    "platform", "digital",
+)
 
-# Country-name aliases so a user typing "US"/"USA"/"UK" still matches Apollo's
-# canonical country strings. Keys and values are compared lower-cased.
-COUNTRY_ALIASES = {
-    "us": "united states", "usa": "united states",
-    "u.s.": "united states", "u.s.a.": "united states",
-    "united states of america": "united states", "america": "united states",
-    "uk": "united kingdom", "u.k.": "united kingdom",
-    "britain": "united kingdom", "great britain": "united kingdom",
-    "england": "united kingdom",
-    "uae": "united arab emirates",
-    "bharat": "india",
-}
-
-# Product/startup vocabulary in the org's keywords + description.
-PRODUCT_HINT_RE = re.compile(
-    r"\b(saas|software|platform|api|apps?|ai|ml|machine learning|"
-    r"artificial intelligence|developer|cloud|analytics|automation|fintech|"
-    r"b2b|product|startup|tech(?:nology)?)\b", re.I)
-
-# Remote / distributed-team vocabulary. This is Efforti's sharpest-pain buyer:
-# a leader who literally cannot walk the floor, so "where is my team's effort
-# actually going" is a daily, felt problem. Apollo has NO native remote filter,
-# so we detect it from the REVEALED org's keywords + description. Deliberately
-# strict — we match remote-team phrases, never bare "remote"/"distributed"
-# (which would false-positive on "remote monitoring" / "distributed systems").
-REMOTE_RE = re.compile(
-    r"remote[-\s]?first"
-    r"|fully[-\s]remote"
-    r"|remote[-\s]?friendly"
-    r"|work[-\s]from[-\s](?:anywhere|home)"
-    r"|distributed[-\s](?:team|teams|workforce|company|first)"
-    r"|globally[-\s]distributed"
-    r"|remote[-\s](?:team|teams|work|workforce|culture|company)"
-    r"|async[-\s]?first",
+# Engineering / delivery / IT-services SIGNAL from the revealed org's keywords +
+# description. This is Efforti's felt pain — a leader whose teams ship software
+# and whose effort/blockers/risks are hard to see. A hit is a strong plus.
+ENG_DELIVERY_RE = re.compile(
+    r"software development|software services|it services|it consulting"
+    r"|product engineering|engineering services|digital transformation"
+    r"|digital engineering|application development|custom software"
+    r"|outsourc|offshor|global capability|capability cent(?:er|re)|captive"
+    r"|managed services|devops|cloud|platform|saas|microservices|api"
+    r"|data engineering|machine learning|artificial intelligence"
+    r"|agile|scrum|delivery|program management|product management",
     re.I)
 
+# Country-name aliases so "US"/"USA"/"UK"/"England" still match Apollo's
+# canonical country strings. Compared lower-cased.
+COUNTRY_ALIASES = {
+    "us": "united states", "usa": "united states", "u.s.": "united states",
+    "u.s.a.": "united states", "united states of america": "united states",
+    "america": "united states", "uk": "united kingdom",
+    "u.k.": "united kingdom", "britain": "united kingdom",
+    "great britain": "united kingdom", "england": "united kingdom",
+    "uae": "united arab emirates", "bharat": "india",
+    "ph": "philippines", "prc": "china",
+}
 
-def remote_signal(org: dict, fields: dict = None) -> bool:
-    """True when the revealed company's keywords/description show it's a
-    remote-first / distributed-team operation. Best-effort heuristic — a False
-    is 'no evidence', not 'proven co-located', since many genuinely-remote firms
-    don't advertise it in Apollo's data."""
-    org = org or {}
-    hay = " ".join([
-        " ".join(org.get("keywords") or []),
-        org.get("short_description") or "",
-        (fields or {}).get("company_desc") or "",
-    ])
-    return bool(REMOTE_RE.search(hay))
-
-# Titles that mean the person no longer holds (or only part-time holds) the
-# role the search matched on — a "Former CEO" or "Fractional CFO" is not the
-# economic buyer.
+# Titles that mean the person no longer holds (or only part-time holds) the role
+# the search matched — a "Former CTO" / "Fractional CFO" is not the buyer.
 STALE_TITLE_RE = re.compile(
-    r"\b(former|retired|emeritus|fractional)\b|\bex[- ]", re.I)
+    r"\b(former|retired|emeritus|fractional|ex)\b|\bex[- ]", re.I)
 NON_ROLE_START_RE = re.compile(r"^\s*(advisor|adviser|board|mentor)\b", re.I)
 
 # --- POC title tiering ------------------------------------------------------
-# The title is the single strongest fit signal we have. Apollo's seniority filter
-# is loose — it leaks re-titled ICs and the "random managers" that keep showing
-# up — so the title drives a LARGE score swing (not the old flat +5), which is
-# what lets the leads list float the genuinely-right decision-makers to the top
-# and sink the noise to the bottom:
-#   +  CEO / Founder / Owner / President / Chief of Staff  (the economic buyer)
-#   +  COO / CFO / CPO                                     (the core supporting DMU)
-#   ~  other C-suite (CTO / CMO / CRO / CIO / ...)         (senior, off-core)
-#   −  VP / Head of / Director                            (senior, not the buyer)
-#   −− Manager / IC / support                             (the noise we rank last)
-# The regexes are checked most-senior-first and short-circuited, so a
-# "Chief Product Officer" scores as CPO and never trips the "officer"/manager
-# rule below it.
+# Title is the single strongest fit signal. The tiers below REWARD Efforti's
+# real buyer set and only sink genuine non-buyers — the opposite of the old
+# code, which penalised VP/Head/Director/Manager (exactly the eng-delivery
+# leaders who reply). Regexes are checked most-relevant-first and short-circuit.
 #
-# Tier 1 — economic buyer / visibility champion. 'president' carries a
-# negative-lookbehind so "Vice President" falls through to the VP tier instead.
+#   T1 economic buyer / visibility champion — CEO/Founder/COO/CoS/President/MD
+#   T2 technical & delivery buyer — CTO/CIO/CISO/CPO AND VP/Head/Director/Manager
+#      of Engineering/Technology/Product/Delivery/Program/Project/IT/Operations
+#      (THE core buyer for a team-delivery-visibility product)
+#   T3 other C-suite / senior — CFO/CMO/CHRO/CRO + generic VP/Head/Director
+#   T4 relevant manager / lead — eng/delivery/program/product/project/IT manager
+#   T5 individual contributor / unrelated — the noise, ranked last
+
+# T1 — 'president' has a negative-lookbehind so "Vice President" falls to T3.
 _T1_RE = re.compile(
-    r"chief of staff"
-    r"|chief executive"
-    r"|\bceo\b"
-    r"|\bfounder\b|co[-\s]?founder|cofounder"
-    r"|\bowner\b|proprietor"
-    r"|managing director|managing partner"
-    r"|(?<!vice[\s-])\bpresident\b",
+    r"chief of staff|chief executive|\bceo\b"
+    r"|\bfounder\b|co[-\s]?founder|cofounder|\bowner\b|proprietor"
+    r"|chief operating|\bcoo\b"
+    r"|managing director|managing partner|(?<!vice[\s-])\bpresident\b",
     re.I)
-# Tier 2 — the named supporting DMU: COO / CFO / CPO.
+
+# T2 — the technical / delivery decision-maker. Two shapes: a tech C-title, OR a
+# VP/Head/Director/Manager whose FUNCTION is engineering/delivery/product/IT.
+_T2_FUNC = (r"engineering|technolog|software|platform|product|delivery"
+            r"|program|programme|project|\bit\b|information technology"
+            r"|operations|devops|infrastructure|data|quality|\bqa\b|pmo")
 _T2_RE = re.compile(
-    r"\bcoo\b|chief operating"
-    r"|\bcfo\b|chief financial"
-    r"|\bcpo\b|chief product",
+    r"\bcto\b|chief technolog|\bcio\b|chief information"
+    r"|\bciso\b|chief (?:product|delivery|digital) officer|\bcpo\b"
+    r"|(?:vp|svp|evp|vice[\s-]president|head|director|dir|manager|lead|"
+    r"chief)[\s,]+(?:of[\s]+)?(?:" + _T2_FUNC + r")"
+    r"|(?:" + _T2_FUNC + r")[\s]+(?:vp|head|director|manager|lead)",
     re.I)
-# Tier 3 — any other C-suite (CTO/CMO/CRO/CIO/CISO/CHRO/CDO/...): senior but not
-# one of the target buyers. Matches a bare C_O abbreviation or "Chief ... Officer".
-_T3_RE = re.compile(r"\bc[a-z]?[a-z]o\b|chief\b.*\bofficer\b", re.I)
-# Tier 4 — VP / Head of / Director: senior, but off the ICP's buyer set.
-_VP_RE = re.compile(
-    r"\bvp\b|\bsvp\b|\bevp\b|vice[\s-]president"
-    r"|head of\b|\bhead\b|director|\bdir\b",
+
+# T3 — other C-suite + generic senior leadership (no eng/delivery function word).
+_T3_RE = re.compile(
+    r"\bcfo\b|chief financial|\bcmo\b|chief marketing|\bchro\b|chief human"
+    r"|\bcro\b|chief revenue|\bcco\b|\bcdo\b|chief\b.*\bofficer\b"
+    r"|\bvp\b|\bsvp\b|\bevp\b|vice[\s-]president|head of\b|\bhead\b"
+    r"|director|\bdir\b|general manager|\bgm\b",
     re.I)
-# Tier 5 — Manager / individual-contributor / support: the "random manager"
-# noise the ICP scoring is meant to rank last.
+
+# T4 — a manager/lead whose function is relevant (eng/delivery/program/IT).
+_T4_RE = re.compile(
+    r"(?:" + _T2_FUNC + r")[\s\w]*\b(manager|lead|head|owner)"
+    r"|\b(manager|lead)[\s\w]*(?:" + _T2_FUNC + r")"
+    r"|scrum master|release manager|technical lead|team lead",
+    re.I)
+
+# T5 — pure IC / clearly-unrelated roles: the noise to rank last.
 _IC_RE = re.compile(
-    r"manager|\bmgr\b|coordinator|specialist|analyst|associate|assistant"
-    r"|representative|\brep\b|generalist|executive|officer|consultant"
-    r"|supervisor|team[\s-]lead|\blead\b|engineer|developer|designer|architect"
-    r"|scientist|recruiter|administrator|accountant|controller|strategist"
-    r"|planner|advocate|evangelist|technician|clerk|intern|trainee|\bagent\b",
+    r"engineer|developer|programmer|analyst|associate|specialist|coordinator"
+    r"|representative|\brep\b|consultant|advisor|designer|architect|scientist"
+    r"|recruiter|accountant|clerk|intern|trainee|\bagent\b|executive"
+    r"|administrator|technician|salesperson|marketer|copywriter|writer",
     re.I)
 
 
 def title_tier(title: str) -> tuple:
-    """Rank a POC's title against Efforti's decision-maker ICP: returns
-    (score_delta, reason). See the tier comments above. An empty title is a mild
+    """Rank a POC's title against Efforti's REAL decision-maker ICP: returns
+    (score_delta, reason). See the tier comments above. Empty title is a mild
     unknown, not a hard penalty (Sent-folder imports often lack one)."""
     t = (title or "").strip()
     if not t:
-        return -6, "title unknown"
+        return -4, "title unknown"
     if _T1_RE.search(t):
-        return 20, "primary buyer role (CEO/Founder/CoS)"
+        return 22, "primary buyer (CEO/Founder/COO/CoS)"
     if _T2_RE.search(t):
-        return 14, "core DMU (COO/CFO/CPO)"
+        return 20, "technical/delivery buyer (CxO / VP / Head of Eng·Delivery·IT)"
     if _T3_RE.search(t):
-        return 4, "other C-suite"
-    if _VP_RE.search(t):
-        return -12, "VP/Director - off-ICP seniority"
+        return 9, "senior leadership (CFO/CMO/VP/Director)"
+    if _T4_RE.search(t):
+        return 3, "delivery/eng manager"
     if _IC_RE.search(t):
-        return -28, f"manager/IC title - not a target buyer ({t})"
-    return -8, "non-buyer title"
+        return -16, f"individual contributor / non-buyer ({t})"
+    return -4, "non-buyer title"
 
-STARTUP_MAX_AGE_YEARS = 12     # founded within this = startup-aged (+)
-OLD_COMPANY_AGE_YEARS = 25     # older than this = established firm (−)
 
-# Headcount tolerance around the requested band: Apollo size buckets are often
-# stale, so the reveal's real headcount only hard-rejects when it's far outside
-# what was asked for. Inside tolerance but outside the exact band = penalty.
+# Headcount tolerance: Apollo size buckets are stale, and for THIS ICP bigger is
+# fine — so headcount NEVER hard-rejects. Below the requested band is a soft
+# penalty; inside is a boost; above the band is a small boost (scaled is good).
 BAND_MIN_FACTOR = 0.5
-BAND_MAX_FACTOR = 1.5
 
 
 def min_score() -> int:
-    """Import bar (env ICP_MIN_SCORE, default 55). Read at call time so tests
-    and a redeploy can change it without a restart."""
+    """Import bar (env ICP_MIN_SCORE, default 55). Read at call time so a redeploy
+    can change it without a restart."""
     try:
         return int(os.environ.get("ICP_MIN_SCORE", "55"))
     except ValueError:
@@ -244,7 +248,7 @@ def is_free_mail(domain: str) -> bool:
 
 def parse_band(size_ranges) -> tuple:
     """(min, max) headcount across the requested Apollo ranges
-    (e.g. ["21,50", "51,100"] -> (21, 100)). (0, 0) = no band requested."""
+    (e.g. ["50,100", "400,1000000"] -> (50, 1000000)). (0, 0) = no band."""
     lo, hi = [], []
     for r in size_ranges or []:
         try:
@@ -264,68 +268,339 @@ def _headcount(org: dict):
         return None
 
 
-def _fmt_month(iso_date: str) -> str:
-    try:
-        return datetime.strptime(iso_date[:7], "%Y-%m").strftime("%b %Y")
-    except (ValueError, TypeError):
-        return ""
+# ---------------------------------------------------------------------------
+# NICHE GATE — precision matching for an explicit "Industry focus" pick.
+#
+# The old gate was a bare substring test over (industry + keywords + name +
+# description). That leaked badly, because the hint list carried word FRAGMENTS:
+#   - "facilit"        matched "facilitate / facilitating / facilitation", so
+#                      every management-consulting deck read as an O&M company.
+#   - "infrastructure" matched "cloud infrastructure / IT infrastructure", so
+#                      software firms read as Construction/EPC companies.
+#   - "mep", "o&m"     matched inside unrelated words.
+#
+# This replaces fragments with anchored PHRASES and grades the evidence:
+#
+#   industries  the exact revealed Apollo industry IS the niche       -> target
+#   strong      unambiguous service phrases ("integrated facility
+#               management", "housekeeping", "general contractor")    -> target
+#   maybe       adjacent industries that only count with support      -> target
+#               when at least one `weak` token also appears
+#   weak        supporting tokens; never enough on their own
+#   hard_off    industries a firm in this niche is never filed under
+#               (software, BFSI, consulting, staffing, ...). Inside
+#               hard_off a single strong phrase is NOT enough: two
+#               independent strong phrases are required, so a genuinely
+#               mislabelled firm survives but marketing copy does not.
+#
+# A pick is a HARD contract - "O&M means only O&M, Construction/EPC means only
+# Construction/EPC" - so anything the gate cannot place is 'off_niche'.
+# ---------------------------------------------------------------------------
+
+# Industries no service-delivery firm in either focus niche is ever filed under.
+_HARD_OFF_COMMON = {
+    "computer software", "software development", "internet",
+    "information technology & services", "it services",
+    "computer & network security", "computer hardware", "computer networking",
+    "semiconductors", "nanotechnology", "computer games", "e-learning",
+    "financial services", "banking", "insurance", "investment management",
+    "investment banking", "capital markets", "venture capital & private equity",
+    "accounting", "legal services", "law practice", "management consulting",
+    "marketing & advertising", "public relations & communications",
+    "market research", "staffing & recruiting", "human resources",
+    "higher education", "education management", "primary/secondary education",
+    "hospital & health care", "pharmaceuticals", "biotechnology",
+    "medical devices", "medical practice", "retail", "supermarkets",
+    "apparel & fashion", "cosmetics", "luxury goods & jewelry",
+    "food & beverages", "restaurants", "media production", "publishing",
+    "broadcast media", "music", "entertainment", "photography",
+    "graphic design", "translation & localization", "information services",
+    "telecommunications", "wireless", "gambling & casinos",
+    "leisure, travel & tourism", "airlines/aviation", "sports",
+}
+
+_ONM_STRONG = (
+    r"facilit(?:y|ies)\s*(?:&|and|/|-)?\s*management",
+    r"facilit(?:y|ies)\s+(?:services|maintenance|operations?|solutions?|support)",
+    r"integrated\s+facilit(?:y|ies)",
+    r"\bifm\b",
+    r"operations?\s*(?:&|and|/)\s*maintenance",
+    r"\bo\s*&\s*m\b",
+    r"\bo\s+and\s+m\b",
+    r"building\s+(?:maintenance|management|services|operations?|upkeep)",
+    r"propert(?:y|ies)\s+management",
+    r"estate\s+management",
+    r"housekeep",
+    r"janitorial",
+    r"(?:soft|hard)\s+services",
+    r"\bmep\b",
+    r"\bhvac\b",
+    r"pest\s+control",
+    r"manned\s+guarding",
+    r"annual\s+maintenance\s+contract",
+    r"(?:preventive|preventative|predictive|planned|breakdown)\s+maintenance",
+    r"(?:plant|equipment|asset|site|technical|building|campus)\s+maintenance",
+    r"maintenance\s+(?:services|management|contracts?|operations?)",
+    r"landscap\w*\s+(?:maintenance|services)",
+    r"cleaning\s+(?:services|solutions|contracts?)",
+    r"workplace\s+(?:services|management|experience|solutions?)",
+    r"utilit(?:y|ies)\s+(?:operations?|management)",
+    r"maintenance\s+of\s+(?:building|plant|equipment|facilit)",
+)
+
+_ONM_WEAK = (
+    r"\bmaintenance\b", r"\bcleaning\b", r"\bsecurity\s+services\b",
+    r"\bcatering\b", r"\bcafeteria\b", r"\bwaste\s+management\b",
+    r"\bsanitation\b", r"\bupkeep\b", r"\bcaretak\w*", r"\bplumbing\b",
+    r"\bfire\s+safety\b", r"\benergy\s+management\b", r"\bsite\s+operations?\b",
+    r"\bbuilt[\s-]environment\b", r"\bfacilit(?:y|ies)\b",
+    r"\boutsourced\s+services\b", r"\bhelpdesk\b", r"\bgroundskeep\w*",
+    r"\belectrical\s+(?:services|maintenance|works?)\b",
+)
+
+_EPC_STRONG = (
+    r"\bepc\b",
+    r"engineering[\s,]*(?:&|and)?[\s,]*procurement[\s,]*(?:&|and)?[\s,]*construction",
+    r"\bconstruction\b",
+    r"civil\s+(?:engineering|works|contract\w*|construction)",
+    r"general\s+contract(?:or|ors|ing)",
+    r"\bcontractors?\b",
+    r"turnkey\s+(?:project|solution|contract|execution|deliver)",
+    r"design[\s-]*(?:&|and)?[\s-]*build",
+    r"infrastructure\s+(?:development|projects?|construction|company)",
+    r"real\s+estate\s+develop",
+    r"\bbuilders?\b",
+    r"project\s+management\s+consultanc",
+    r"structural\s+(?:steel|engineering|design|works?)",
+    r"\bformwork\b", r"\bpiling\b", r"\bscaffolding\b", r"\bearthworks?\b",
+    r"(?:road|roadway|highway|bridge|tunnel|metro|railway)\s+(?:construction|projects?|works?)",
+    r"site\s+(?:execution|engineering|mobilisation|mobilization)",
+    r"residential\s+(?:and\s+)?(?:commercial\s+)?(?:projects?|construction|developments?)",
+    r"civil\s+contractor",
+    r"building\s+construction",
+)
+
+_EPC_WEAK = (
+    r"\bengineering\b", r"\bprojects?\b", r"\binfrastructure\b",
+    r"\barchitect\w*", r"\breal\s+estate\b", r"\bcivil\b", r"\bfabrication\b",
+    r"\berection\b", r"\bcommissioning\b", r"\bconcrete\b", r"\bcement\b",
+    r"\bmasonry\b", r"\bfit[\s-]?out\b", r"\bdevelopers?\b", r"\btownship\b",
+    r"\bhousing\b", r"\bindustrial\s+plants?\b", r"\bexcavation\b",
+    r"\bquantity\s+survey", r"\bbim\b",
+)
 
 
-def funding_signal(org: dict) -> tuple:
-    """(funded: bool, trigger: str). Builds a human trigger line like
-    "raised $12M Series A (Nov 2025)" from whatever funding fields the reveal
-    happened to include — all fields optional, absence is not a negative."""
-    stage = (org.get("latest_funding_stage") or "").strip()
-    date = _fmt_month(org.get("latest_funding_round_date") or "")
-    printed = (org.get("total_funding_printed") or "").strip()
-    total = org.get("total_funding") or 0
-    events = org.get("funding_events") or []
-    try:
-        total = float(total)
-    except (TypeError, ValueError):
-        total = 0
-    funded = bool(stage or date or printed or total or events)
-    if not funded:
-        return False, ""
-    amount = f"${printed}" if printed else ""
-    if not amount and total:
-        m = total / 1_000_000
-        amount = f"${m:.0f}M" if m >= 1 else f"${total / 1_000:.0f}K"
-    parts = ["raised", amount, stage, f"({date})" if date else ""]
-    return True, " ".join(p for p in parts if p).replace("  ", " ").strip()
+# A company that SELLS software/tech TO the niche is not IN the niche: a
+# construction-tech SaaS is not a contractor, a CAFM platform is not an FM firm.
+# When these markers appear, two independent strong phrases are required — and
+# inside a hard-off industry a vendor never qualifies at all.
+_VENDOR_RE = re.compile(
+    r"\bsaas\b|\bsoftware\b|software[\s-]as[\s-]a[\s-]service"
+    r"|\bplatform\b|\berp\b|\bcrm\b|\bdevops\b|\bcloud\b"
+    r"|\bmobile\s+app\b|\bweb\s+app\b|\bmarketplace\b|\bfintech\b"
+    r"|\bproptech\b|\bcontech\b|construction[\s-]?tech|venture\s+builder"
+    r"|\bit\s+infrastructure\b|\bdata\s+cent(?:er|re)\b",
+    re.I)
 
 
-def _classify_industry(industry: str, extra_targets=None) -> str:
-    """'target' / 'smb' / 'blocked' / 'neutral' / 'unknown'. `extra_targets` are
-    the industry hint substrings from the user's dropdown selection — a match
-    promotes the industry to 'target', so an explicit pick (Manufacturing,
-    Construction, Logistics, HR Tech...) tightens scoring, not just the search,
-    and WINS over the traditional-SMB penalty — deliberately choosing a vertical
-    means you want it. Hard institutional blocks still win over a hint (we never
-    want a hospital, even if the user picked HealthTech)."""
+def _compile(patterns):
+    return [re.compile(p, re.I) for p in patterns]
+
+
+NICHE_RULES = {
+    "onm_fm": {
+        "label": "O&M / Facility Management",
+        "industries": {"facilities services", "facilities support services",
+                       "facility management", "building maintenance"},
+        "maybe": {"real estate", "commercial real estate",
+                  "environmental services", "renewables & environment",
+                  "utilities", "security & investigations", "consumer services",
+                  "outsourcing/offshoring", "hospitality", "construction",
+                  "civil engineering", "mechanical or industrial engineering",
+                  "industrial automation", "machinery", "oil & energy",
+                  "individual & family services", "business supplies & equipment",
+                  "logistics & supply chain", "events services",
+                  "recreational facilities & services"},
+        "hard_off": _HARD_OFF_COMMON,
+        "strong": _compile(_ONM_STRONG),
+        "weak": _compile(_ONM_WEAK),
+    },
+    "construction_epc": {
+        "label": "Construction / EPC",
+        "industries": {"construction", "civil engineering",
+                       "building construction"},
+        "maybe": {"architecture & planning", "real estate",
+                  "commercial real estate", "building materials",
+                  "glass, ceramics & concrete",
+                  "mechanical or industrial engineering",
+                  "industrial automation", "machinery", "oil & energy",
+                  "mining & metals", "utilities", "renewables & environment",
+                  "environmental services", "facilities services", "design",
+                  "transportation/trucking/railroad", "logistics & supply chain",
+                  "defense & space", "shipbuilding"},
+        "hard_off": _HARD_OFF_COMMON,
+        "strong": _compile(_EPC_STRONG),
+        "weak": _compile(_EPC_WEAK),
+    },
+}
+
+
+def _hint_spec(hints) -> dict:
+    """A niche spec for the verticals with no hand-built rule: the dropdown's own
+    hint list, matched on WORD BOUNDARIES instead of as bare substrings."""
+    pats = []
+    for h in hints or []:
+        h = (h or "").strip().lower()
+        if not h:
+            continue
+        pat = re.escape(h)
+        if h[0].isalnum():
+            pat = r"\b" + pat
+        if h[-1].isalnum():
+            pat = pat + r"\b"
+        pats.append(re.compile(pat, re.I))
+    return {"label": "", "industries": set(), "maybe": set(),
+            "hard_off": set(), "strong": pats, "weak": []}
+
+
+def build_niche(slugs, hints_by_slug=None):
+    """Build the niche spec list for the ticked "Industry focus" slugs.
+
+    `hints_by_slug` is {slug: [hint, ...]} from apollo.industry_hints, used only
+    for the verticals with no hand-built rule (icp.py must not import apollo).
+    Returns a list of specs (a lead matching ANY of them is on-niche), or None
+    when nothing is ticked, which keeps the broad-ICP classification."""
+    specs = []
+    for slug in slugs or []:
+        slug = (slug or "").strip()
+        if not slug:
+            continue
+        rule = NICHE_RULES.get(slug)
+        if rule:
+            specs.append(rule)
+            continue
+        hints = (hints_by_slug or {}).get(slug)
+        if hints:
+            specs.append(_hint_spec(hints))
+    return specs or None
+
+
+def _as_specs(extra_targets):
+    """Accept either the spec list from build_niche or the legacy flat list of
+    hint substrings, so older callers keep working."""
+    if not extra_targets:
+        return None
+    if isinstance(extra_targets, dict):
+        return [extra_targets]
+    seq = list(extra_targets)
+    if not seq:
+        return None
+    if isinstance(seq[0], dict):
+        return seq
+    return [_hint_spec(seq)]
+
+
+def _hits(patterns, text) -> int:
+    if not text:
+        return 0
+    return sum(1 for rx in patterns if rx.search(text))
+
+
+def niche_labels(extra_targets) -> str:
+    """Human label(s) for the picked niche(s) - for logs and the UI."""
+    specs = _as_specs(extra_targets) or []
+    return ", ".join(s.get("label") or "" for s in specs if s.get("label"))
+
+
+def _niche_target(specs, industry: str, haystack: str,
+                  lenient: bool = False, search_verified: bool = False) -> bool:
+    """True when the company is genuinely inside one of the picked niches.
+
+    `lenient` is the FREE pre-reveal pass, where all we have is the obfuscated
+    preview (industry + keywords + name): there a single weak token is accepted
+    so a real firm with a sparse preview is not skipped. The post-reveal pass,
+    which has the full description, is strict."""
     ind = (industry or "").strip().lower()
-    if not ind:
-        return "unknown"
+    hay = (ind + " " + (haystack or "")).strip().lower()
+    vendor = bool(_VENDOR_RE.search(hay))
+    if search_verified:
+        # The Apollo search was locked to this niche's NAICS industry codes, so
+        # every company that came back already carries Apollo's own
+        # classification for the vertical. Re-proving that from marketing text
+        # only burned credits: 18 of 41 reveals in a real run were revealed and
+        # then thrown away as "outside selected niche" even though Apollo had
+        # filed them under the niche. INCLUDE is settled upstream; all this gate
+        # still owes is the EXCLUDE — a hard-off industry, or a tech vendor
+        # selling INTO the niche rather than working in it.
+        for spec in specs:
+            if ind and ind in spec["industries"]:
+                return True
+            hard = bool(ind and ind in spec["hard_off"])
+            if (hard or vendor) and _hits(spec["strong"], hay) < 2:
+                continue
+            return True
+        return False
+    for spec in specs:
+        if ind and ind in spec["industries"]:
+            return True
+        n_strong = _hits(spec["strong"], hay)
+        hard = bool(ind and ind in spec["hard_off"])
+        if hard or vendor:
+            # Inside a hard-off industry (or for a tech vendor selling to the
+            # niche) one phrase is marketing copy; two independent ones mean
+            # Apollo mislabelled a real niche firm. A tech vendor that is ALSO
+            # filed under a hard-off industry never qualifies.
+            if n_strong >= 2 and not (hard and vendor):
+                return True
+            continue
+        if n_strong:
+            return True
+        n_weak = _hits(spec["weak"], hay)
+        if not n_weak:
+            continue
+        if ind and ind in spec["maybe"]:
+            return True
+        if not ind and n_weak >= (1 if lenient else 2):
+            return True
+        if lenient and n_weak >= 2:
+            return True
+    return False
+
+
+def _classify_industry(industry: str, extra_targets=None,
+                       niche_haystack: str = "",
+                       search_verified: bool = False) -> str:
+    """'target' / 'off' / 'off_niche' / 'blocked' / 'unknown'.
+
+    When `extra_targets` (the niche spec list from build_niche, i.e. the user's
+    "Industry focus" pick) is present, classification is STRICT — an explicit
+    niche pick means ONLY that niche, graded by _niche_target over the revealed
+    industry plus `niche_haystack` (company name + keywords + description).
+    Everything it cannot place is 'off_niche', a hard reject in score_lead, so
+    "O&M means only O&M, Construction/EPC means only that". Hard institutional
+    blocks still win over everything. With no pick, the general ICP
+    classification (target / off / unknown) applies."""
+    ind = (industry or "").strip().lower()
     if ind in BLOCKED_INDUSTRIES:
         return "blocked"
-    # An EXPLICIT dropdown pick beats the SMB penalty (but never a hard block):
-    # a company matching the chosen vertical is on-target even when its Apollo
-    # industry ("construction", "machinery", "building materials"...) otherwise
-    # sits in the traditional-SMB list.
-    if extra_targets and any(h and h in ind for h in extra_targets):
-        return "target"
-    if ind in SMB_INDUSTRIES:
-        return "smb"
+    specs = _as_specs(extra_targets)
+    if specs:
+        return ("target" if _niche_target(specs, ind, niche_haystack or "",
+                                          search_verified=search_verified)
+                else "off_niche")
+    if not ind:
+        return "unknown"
     if ind in TARGET_INDUSTRIES or any(h in ind
                                        for h in TARGET_INDUSTRY_HINTS):
         return "target"
-    return "neutral"
+    if ind in OFF_ICP_INDUSTRIES:
+        return "off"
+    return "unknown"
 
 
 def _loc_tokens(value: str):
-    """Split a requested location into comparable tokens, each normalised
-    through COUNTRY_ALIASES ("US" -> "united states"). "Bengaluru, India"
-    -> {"bengaluru", "india"}."""
+    """Split a requested location into comparable tokens, each normalised through
+    COUNTRY_ALIASES ("England" -> "united kingdom")."""
     out = set()
     for part in re.split(r"[,/|]", value or ""):
         p = part.strip().lower()
@@ -337,16 +612,13 @@ def _loc_tokens(value: str):
 def location_match(locations, org: dict, person: dict = None) -> tuple:
     """Genuine HQ-location gate on a REVEALED record: (ok, detail).
 
-    Returns ok=True when no location was requested. Otherwise the company's real
-    location must match one of the requested ones. We look at the org's
-    country/state/city/address first (that's the HQ the ICP cares about) and
-    fall back to the person's own country only when the org carries no location
-    at all. Match is intentionally forgiving in ONE direction — a requested
-    "india" matches an org country "India" or an address "Bengaluru, India" —
-    but a determinable foreign country with no requested-token overlap is
-    rejected. When nothing locational is knowable we pass (rare post-reveal),
-    so sparse-but-valid records aren't nuked; the clear overseas leaks, which
-    all carry a country, are what this catches."""
+    True when no location was requested. Otherwise the company's real location
+    must match one of the requested ones. We check the org's country/state/city/
+    address first (the HQ the ICP cares about) and fall back to the person's own
+    country only when the org carries no location at all. Forgiving in one
+    direction ("india" matches "Bengaluru, India") but a determinable foreign
+    country with no overlap is rejected — this is what drops Apollo's overseas
+    leaks on an India search."""
     wanted = set()
     for loc in locations or []:
         wanted |= _loc_tokens(loc)
@@ -357,7 +629,6 @@ def location_match(locations, org: dict, person: dict = None) -> tuple:
     person = person or {}
     country = (org.get("country") or "").strip().lower()
     country = COUNTRY_ALIASES.get(country, country)
-    # Everything we can compare against, most-authoritative first.
     haystacks = [country,
                  (org.get("state") or "").strip().lower(),
                  (org.get("city") or "").strip().lower(),
@@ -371,12 +642,9 @@ def location_match(locations, org: dict, person: dict = None) -> tuple:
     if org_has_location:
         if hit(haystacks):
             return True, ""
-        # Org has a real location and none of it matches the request -> drop.
         shown = country or next((h for h in haystacks[1:] if h), "?")
         return False, f"HQ {shown} not in {sorted(wanted)}"
 
-    # No org location at all — fall back to the person's country before giving
-    # the benefit of the doubt.
     pcountry = (person.get("country") or "").strip().lower()
     pcountry = COUNTRY_ALIASES.get(pcountry, pcountry)
     if pcountry:
@@ -386,39 +654,85 @@ def location_match(locations, org: dict, person: dict = None) -> tuple:
     return True, ""          # nothing knowable — don't over-reject
 
 
+def _org_trigger(org: dict, industry: str) -> str:
+    """A short, factual anchor line for personalization / fallback opener, built
+    only from fields the reveal already carried (ZERO extra credits): industry ·
+    headcount · HQ city · funding if present. Absence just shortens it."""
+    bits = []
+    ind = (industry or org.get("industry") or "").strip()
+    if ind:
+        bits.append(ind)
+    n = _headcount(org)
+    if n:
+        bits.append(f"~{n:,} employees")
+    city = (org.get("city") or "").strip()
+    country = (org.get("country") or "").strip()
+    where = ", ".join(p for p in (city, country) if p)
+    if where:
+        bits.append(where)
+    printed = (org.get("total_funding_printed") or "").strip()
+    if printed:
+        bits.append(f"${printed} raised")
+    return " · ".join(bits)
+
+
 # ---------------------------------------------------------------- verdicts
 
 def prescreen_org(org: dict) -> tuple:
     """FREE gate on an obfuscated search-preview org, before any reveal credit:
-    (ok, reason). Only rejects on unambiguous evidence the preview happens to
-    carry — a hard-blocked industry or a stock ticker. Missing data passes."""
+    (ok, reason). Only rejects on unambiguous evidence the preview carries — a
+    hard-blocked institutional industry. (We deliberately do NOT reject public
+    companies any more: big IT-services / BFSI firms are listed and IN scope.)"""
     if not org:
         return True, ""
-    if (org.get("publicly_traded_symbol") or "").strip():
-        return False, "public company"
     if _classify_industry(org.get("industry", "")) == "blocked":
         return False, f"blocked industry: {org.get('industry')}"
     return True, ""
 
 
-def score_lead(fields: dict, org: dict, band: tuple,
-               extra_targets=None, prefer_remote=False) -> dict:
-    """Score one REVEALED contact against the ICP. `fields` is the mapped Lead
-    dict (from apollo._person_to_fields), `org` the raw revealed organization,
-    `band` the (min,max) headcount actually requested, `extra_targets` the
-    industry hint substrings from the user's dropdown selection (promote a
-    matching neutral industry to target). `prefer_remote` turns the
-    remote/distributed signal into a strong preference: a remote-team company is
-    boosted harder AND a company with no remote evidence is penalised, so within
-    a remote-focused pull the distributed teams rise above the score bar and the
-    co-located ones fall below it (a preference, not a hard reject — we never
-    nuke a strong-fit company just for lacking a remote tag). Never raises."""
+def niche_prescreen(org: dict, extra_targets) -> bool:
+    """FREE pre-reveal niche gate: True = worth a reveal, False = skip (save the
+    credit). When a niche is explicitly picked and the obfuscated search preview
+    already carries an industry/keywords/name that cannot be that niche, we skip
+    the reveal entirely. Runs in LENIENT mode — the preview is sparse, so one
+    supporting token is enough and a completely blank preview still passes; the
+    strict pass happens after the reveal, on the full description."""
+    specs = _as_specs(extra_targets)
+    if not specs:
+        return True
+    ind = (org.get("industry") or "").strip().lower()
+    kws = " ".join(org.get("keywords") or []).strip()
+    desc = (org.get("short_description") or "").strip()
+    # THE SEARCH PREVIEW IS THIN. Apollo's people-search response carries only
+    # the company NAME plus has_* booleans — no industry, no keywords, no
+    # description. Judging a niche from a bare company name rejects nearly every
+    # real firm ("Prestige Group" says nothing), so with NO industry, keyword or
+    # description evidence we PASS and let the post-reveal gate — which has the
+    # full org record — make the call. Reject before paying ONLY on positive
+    # evidence that the company is off-niche, never on missing evidence.
+    if not ind and not kws and not desc:
+        return True
+    hay = " ".join([kws, desc[:400], org.get("name") or ""]).strip()
+    return _niche_target(specs, ind, hay, lenient=True)
+
+
+def score_lead(fields: dict, org: dict, band: tuple, extra_targets=None,
+               search_verified: bool = False) -> dict:
+    """Score one REVEALED contact against the REAL ICP. `fields` is the mapped
+    Lead dict (from apollo._person_to_fields), `org` the raw revealed
+    organization, `band` the (min,max) headcount requested, `extra_targets` the
+    niche spec list from build_niche (the user's "Industry focus" pick, or None
+    for the broad ICP). Never raises.
+
+    Design vs the old scorer: no funding/founded-year/remote weighting, no
+    public-company reject, and — critically — no hard headcount reject (scaled
+    orgs are the target). Industry fit + title tier + eng-delivery signal +
+    scale do the work."""
     org = org or {}
     reasons = []
 
     def reject(why):
-        return {"score": 0, "verdict": "reject", "reasons": [why],
-                "trigger": ""}
+        return {"score": 0, "verdict": "reject", "reasons": [why], "trigger": ""}
 
     # ---- hard gates ------------------------------------------------------
     title = (fields.get("title") or "").strip()
@@ -430,82 +744,71 @@ def score_lead(fields: dict, org: dict, band: tuple,
     if is_free_mail(domain):
         return reject(f"free-mail domain: {domain}")
 
-    if (org.get("publicly_traded_symbol") or "").strip():
-        return reject("public company")
-
-    ind_class = _classify_industry(fields.get("industry", ""), extra_targets)
+    industry = fields.get("industry", "") or org.get("industry", "")
+    # Niche match haystack: Apollo often MASKS a real O&M/EPC firm's industry (or
+    # labels it "outsourcing" / "consumer services"), so match the picked niche
+    # against the company NAME + keywords + description too, not just the industry
+    # string — otherwise a genuine facility-management or construction company is
+    # rejected AFTER you paid to reveal it. Truly off-niche firms still won't carry
+    # the niche words, so precision holds.
+    niche_hay = " ".join([
+        " ".join(org.get("keywords") or []),
+        fields.get("company", "") or org.get("name", "") or "",
+        (org.get("short_description") or "")[:400],
+        (fields.get("company_desc") or "")[:400],
+    ])
+    ind_class = _classify_industry(industry, extra_targets, niche_hay,
+                                   search_verified=search_verified)
     if ind_class == "blocked":
-        return reject(f"blocked industry: {fields.get('industry')}")
-
-    n = _headcount(org)
-    band_min, band_max = band or (0, 0)
-    if n and band_min and band_max:
-        if n < max(1, int(band_min * BAND_MIN_FACTOR)) or \
-                n > int(band_max * BAND_MAX_FACTOR):
-            return reject(
-                f"headcount out of band: {n} vs {band_min}–{band_max}")
+        return reject(f"blocked industry: {industry}")
+    if ind_class == "off_niche":
+        return reject(f"outside selected niche: {industry or 'unknown industry'}")
 
     # ---- score -----------------------------------------------------------
-    score = 45
+    score = 50
+    trigger = _org_trigger(org, industry)
 
     if ind_class == "target":
-        score += 15
-        reasons.append(f"target industry ({fields.get('industry')})")
-    elif ind_class == "smb":
-        score -= 25
-        reasons.append(f"SMB industry ({fields.get('industry')})")
+        score += 18
+        reasons.append(f"target industry ({industry})")
+    elif ind_class == "off":
+        score -= 28
+        reasons.append(f"off-ICP industry ({industry})")
     elif ind_class == "unknown":
-        score -= 5
+        score -= 4
         reasons.append("industry unknown")
 
-    funded, trigger = funding_signal(org)
-    if funded:
-        score += 15
-        reasons.append(trigger or "funded")
-
-    year = org.get("founded_year")
-    try:
-        age = datetime.now().year - int(year) if year else None
-    except (TypeError, ValueError):
-        age = None
-    if age is not None:
-        if age <= STARTUP_MAX_AGE_YEARS:
-            score += 8
-            reasons.append(f"founded {year}")
-        elif age >= OLD_COMPANY_AGE_YEARS:
-            score -= 10
-            reasons.append(f"established firm (founded {year})")
-
+    # Engineering / delivery / IT-services signal — Efforti's felt pain.
     haystack = " ".join([
         " ".join(org.get("keywords") or []),
+        org.get("short_description") or "",
         fields.get("company_desc") or "",
     ])
-    hints = set(m.group(0).lower() for m in PRODUCT_HINT_RE.finditer(haystack))
-    if hints:
-        score += 10
-        reasons.append("product signals: " + ", ".join(sorted(hints)[:4]))
+    if ENG_DELIVERY_RE.search(haystack):
+        score += 8
+        reasons.append("engineering/delivery-led team")
 
-    # Remote / distributed team — the buyer who feels Efforti's pain hardest.
-    if REMOTE_RE.search(haystack):
-        score += 12 if prefer_remote else 6
-        reasons.append("remote/distributed team")
-    elif prefer_remote:
-        score -= 6
-        reasons.append("no remote-team signal")
-
+    # Scale: reward in-band; a LARGER-than-band company is still good (scaled ops
+    # is the ICP), only a below-band one is softly penalised. Never a hard reject.
+    n = _headcount(org)
+    band_min, band_max = band or (0, 0)
     if n:
         if band_min and band_max and band_min <= n <= band_max:
             score += 10
-            reasons.append(f"{n} employees (in band)")
-        elif band_min and band_max:
-            score -= 10
-            reasons.append(f"{n} employees (outside {band_min}–{band_max})")
+            reasons.append(f"{n:,} employees (in band)")
+        elif band_max and n > band_max:
+            score += 4
+            reasons.append(f"{n:,} employees (scaled — above band)")
+        elif band_min and n < max(1, int(band_min * BAND_MIN_FACTOR)):
+            score -= 8
+            reasons.append(f"{n:,} employees (below target size)")
+        else:
+            reasons.append(f"{n:,} employees")
     else:
-        score -= 5
+        score -= 3
         reasons.append("headcount unknown")
 
-    # POC title tier — the strongest, most differentiating signal (see title_tier):
-    # the target CEO/Founder/COO/CoS/CFO/CPO roles climb, VP/Director/Manager sink.
+    # POC title tier — the strongest, most differentiating signal.
     tdelta, treason = title_tier(title)
     score += tdelta
     reasons.append(treason)

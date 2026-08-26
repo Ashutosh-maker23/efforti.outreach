@@ -120,6 +120,22 @@ class SequenceStep(Base):
     sequence = relationship("Sequence", back_populates="steps")
 
 
+class Mailer(Base):
+    """An editable first-touch cold-email variant. Seeded from app/mailers.MAILERS
+    on first boot, then edited on the Sequences page — the SAVED subject/body are
+    what actually get sent when the variant is picked on the Leads page. `subject`
+    is the BASE line; the recipient's first name is prepended at send time so every
+    email is its own Gmail thread (identical subjects collapse into one thread)."""
+    __tablename__ = "mailers"
+    id = Column(Integer, primary_key=True)
+    slug = Column(String, unique=True, nullable=False)
+    niche = Column(String, default="")
+    label = Column(String, default="")
+    subject = Column(String, default="")           # BASE subject (name prepended on send)
+    body = Column(Text, nullable=False)
+    sort = Column(Integer, default=0)              # display order
+
+
 class Enrollment(Base):
     """A lead progressing through a sequence."""
     __tablename__ = "enrollments"
@@ -152,7 +168,12 @@ class Message(Base):
     body = Column(Text)
     message_id = Column(String, index=True)        # RFC Message-ID we generated
     sent_at = Column(DateTime, default=utcnow)
-    status = Column(String, default="sent")        # sent / failed
+    # sending  -> claimed, SMTP in flight (holds the slot so nobody else sends)
+    # sent     -> delivered to the SMTP server
+    # failed   -> attempt failed; releases the slot so a retry can claim it
+    # duplicate-> a second copy that predates the unique claim (kept for history,
+    #             never counted as sent)
+    status = Column(String, default="sent")
 
 
 class Suppression(Base):
@@ -260,6 +281,93 @@ def _migrate_sqlite():
                 if name not in have:
                     conn.execute(
                         text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+    if "messages" in tables:
+        _install_send_claim_index()
+
+
+def _install_send_claim_index():
+    """Make the send claim atomic: one live row per (lead, step).
+
+    Historical duplicates must be collapsed first or the unique index cannot be
+    built. Nothing is deleted — the EARLIEST \'sent\' row per (lead, step) keeps
+    its status and every later copy is relabelled \'duplicate\', which every
+    counter already ignores (they all filter status == \'sent\'), so the analytics
+    stop double-counting emails that only ever went out once by mistake."""
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        rows = conn.execute(text(
+            "SELECT id FROM messages WHERE status IN ('sent','sending') "
+            "AND id NOT IN (SELECT MIN(id) FROM messages "
+            "              WHERE status IN ('sent','sending') "
+            "              GROUP BY lower(lead_email), step_index)")).fetchall()
+        if rows:
+            conn.execute(
+                text("UPDATE messages SET status='duplicate' WHERE id IN (%s)"
+                     % ",".join(str(int(r[0])) for r in rows)))
+        conn.execute(text(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {SEND_CLAIM_INDEX} "
+            "ON messages(lower(lead_email), step_index) "
+            "WHERE status IN ('sent','sending')"))
+    return len(rows)
+
+
+# --------------------------------------------------------------------------
+# Send claims — the guard that stops one lead getting the same email twice.
+#
+# The old guard read "has a \'sent\' Message for this (lead, step)?" and only
+# wrote that row AFTER the SMTP call, with the caller committing later still. So
+# the gap between checking and recording was the whole personalization + SMTP
+# round-trip — tens of seconds. Anything else that started inside that window
+# (the background scheduler firing while a manual send was in flight, a second
+# click, a duplicate enrollment) saw an empty table and sent again. That is how
+# one lead received three copies of the opener, two of them stamped the same
+# millisecond from two different enrollments.
+#
+# Now the slot is CLAIMED and committed before a single byte goes to SMTP, and a
+# partial UNIQUE INDEX on (lower(lead_email), step_index) makes the claim atomic
+# at the database level — across threads, sessions and processes.
+# --------------------------------------------------------------------------
+SEND_CLAIM_INDEX = "ux_messages_lead_step_live"
+STALE_CLAIM_MINUTES = 15
+
+
+def claim_send_slot(db, enrollment_id, lead_email: str, mailbox_email: str,
+                    step_index: int):
+    """Reserve (lead, step) for THIS sender. Returns the claimed Message row to
+    send under, or None when somebody else already holds it — in which case the
+    caller must NOT send. Commits; safe to call concurrently."""
+    from sqlalchemy.exc import IntegrityError
+    try:
+        db.commit()          # persist prior work so a losing claim can't undo it
+    except Exception:
+        db.rollback()
+    rec = Message(enrollment_id=enrollment_id,
+                  lead_email=(lead_email or "").strip().lower(),
+                  mailbox_email=mailbox_email, step_index=step_index,
+                  status="sending")
+    db.add(rec)
+    try:
+        db.commit()
+        return rec
+    except IntegrityError:
+        db.rollback()
+        return None
+
+
+def release_stale_claims(db) -> int:
+    """A crash mid-SMTP can strand a \'sending\' row, which would block that step
+    for good. Anything older than STALE_CLAIM_MINUTES is released to \'failed\' so
+    it can be retried. Returns how many were released."""
+    from datetime import timedelta
+    cutoff = utcnow() - timedelta(minutes=STALE_CLAIM_MINUTES)
+    stale = (db.query(Message)
+             .filter(Message.status == "sending", Message.sent_at < cutoff)
+             .all())
+    for m in stale:
+        m.status = "failed"
+    if stale:
+        db.commit()
+    return len(stale)
 
 
 def log(db, kind: str, detail: str):

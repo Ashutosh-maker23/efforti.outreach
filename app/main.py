@@ -24,11 +24,13 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, case, func, or_
 
 from .analytics import compute as compute_analytics
-from .apollo import (COMPANY_TRAITS, DEFAULT_KEYWORDS, INDUSTRY_OPTIONS,
-                     SIZE_PRESETS,
-                     industry_hints, industry_tags, preview_apollo,
-                     pull_apollo, trait_hints, trait_tags)
+from .apollo import (DEFAULT_KEYWORDS, HQ_OPTIONS, INDUSTRY_OPTIONS,
+                     ROLE_OPTIONS, SIZE_OPTIONS,
+                     hq_locations, industry_naics, industry_tags, niche_spec,
+                     preview_apollo, pull_apollo, role_seniorities,
+                     role_titles, size_ranges_for)
 from .emailer import signature_preview_html, verify_credentials
+from .mailers import get_mailer, mailers_grouped, seed_mailers
 from .importer import import_csv, import_from_sent
 from .research import research_companies
 # NOTE: personalization is generated on demand at send time (enrich.ensure_
@@ -55,6 +57,23 @@ async def lifespan(app: FastAPI):
     init_db()
     db = SessionLocal()
     seed_default_sequence(db)
+    try:
+        seed_mailers(db)             # copy/refresh the 8 mailer defaults in the DB
+    except Exception:
+        db.rollback()                # busy/locked DB must never block startup
+    # Off-ICP bucket retired: only sendable leads are kept now. Best-effort purge
+    # of any legacy 'off_icp' leads (never enrolled or sent). Wrapped so a busy /
+    # locked DB can NEVER block startup — it simply retries on the next boot, and
+    # off_icp leads are already hidden from every view meanwhile.
+    try:
+        _n_off = db.query(Lead).filter(Lead.status == "off_icp").delete()
+        if _n_off:
+            log(db, "import",
+                f"Retired the off-ICP bucket: removed {_n_off} kept-aside "
+                f"off-ICP lead(s). Pulls now discard non-fits instead of storing.")
+        db.commit()
+    except Exception:
+        db.rollback()
     # Cutover: keep every in-flight follow-up on a valid weekday >= the Monday
     # the working-day cadence begins (2026-08-03) — no weekend/pre-Monday sends.
     # Idempotent, so it corrects legacy dates on each boot and no-ops thereafter.
@@ -519,7 +538,10 @@ def _leads_ctx(request, db, status="", due=-1, page=1,
                    Lead.company_research != "",
                    Lead.company_research.isnot(None)).count(),
                industry_options=INDUSTRY_OPTIONS,
-               company_traits=COMPANY_TRAITS,
+               role_options=ROLE_OPTIONS,
+               size_options=SIZE_OPTIONS,
+               hq_options=HQ_OPTIONS,
+               mailers=mailers_grouped(db),
                **extra)
 
 
@@ -527,9 +549,12 @@ def _leads_ctx(request, db, status="", due=-1, page=1,
 def leads_page(request: Request, status: str = "", due: int = -1,
                page: int = 1, per_page: int = 100, pulled: int = 0,
                brands: int = 0, per_brand: int = 0, brands_filled: int = 0,
+               want: int = 0,
                fetched: int = 0, imported: int = 0, brand_full: int = 0,
                dupe: int = 0, no_email: int = 0, icp: int = 0, loc: int = 0,
-               reveals: int = 0, known: int = 0, officp: int = 0,
+               reveals: int = 0, known: int = 0,
+               savedpre: int = 0, nichepre: int = 0, locpre: int = 0,
+               pages: int = 0, stop: str = "", mode: str = "",
                exhausted: int = 0,
                one: str = "", bulk: int = 0, bsent: int = 0,
                bskip: int = 0, bnomb: int = 0, bstep: int = -1,
@@ -571,8 +596,12 @@ def leads_page(request: Request, status: str = "", due: int = -1,
                            "imported": imported, "brand_full": brand_full,
                            "dupe": dupe, "no_email": no_email, "icp": icp,
                            "location": loc, "reveals": reveals,
-                           "known": known, "off_icp_kept": officp,
-                           "target_total": brands * per_brand,
+                           "known": known,
+                           "discarded": max(0, reveals - imported),
+                           "saved_pre": savedpre, "niche_pre": nichepre,
+                           "loc_pre": locpre, "pages": pages,
+                           "stop_reason": stop, "mode": mode,
+                           "target_total": want or (brands * per_brand),
                            "exhausted": bool(exhausted)}
         send_feedback = None
         if one:
@@ -591,75 +620,102 @@ def leads_page(request: Request, status: str = "", due: int = -1,
         db.close()
 
 
-def _apollo_filters(industries, traits, locations, size_range,
-                    size_min="", size_max=""):
-    """Shared parsing for the Apollo form fields.
+def _slugs(csv):
+    """Comma-joined slug string from a multi-select hidden field -> clean list."""
+    return [s.strip() for s in (csv or "").split(",") if s.strip()]
 
-    `industries` (vertical) and `traits` (who-they-sell-to / how-they-operate)
-    are comma-joined slug lists from the two multi-select dropdowns. Each slug
-    maps to Apollo keyword tags (bias the free search) and to ICP scorer hints
-    (count a matching revealed vertical as on-target). Selecting nothing
-    anywhere falls back to the broad-tech DEFAULT_KEYWORDS (handled downstream).
-    Returns (keyword_tags, locations, size_ranges, target_hints)."""
-    ind = [s.strip() for s in (industries or "").split(",") if s.strip()]
-    trt = [s.strip() for s in (traits or "").split(",") if s.strip()]
-    # Curated tags: industry first, then trait, de-duplicated case-insensitively.
-    tags, seen = [], set()
-    for t in industry_tags(ind) + trait_tags(trt):
-        tl = t.lower()
-        if tl not in seen:
-            seen.add(tl)
-            tags.append(t)
-    # Nothing chosen at all -> the broad-tech default ICP bias (what the UI
-    # promises). Any explicit pick replaces it so "Fintech" means fintech, not
-    # fintech + everything.
-    kw = tags or list(DEFAULT_KEYWORDS)
-    loc = [l.strip() for l in (locations or "").split(",") if l.strip()] or None
-    # 'custom' -> the operator's own headcount band (e.g. Manufacturing 40–60);
-    # otherwise a named preset, falling back to the default startup band.
-    if size_range == "custom":
-        try:
-            lo, hi = int(size_min), int(size_max)
-            lo, hi = min(lo, hi), max(lo, hi)
-            sizes = [f"{max(1, lo)},{hi}"] if hi >= 1 else SIZE_PRESETS["startup"]
-        except (TypeError, ValueError):
-            sizes = SIZE_PRESETS["startup"]
-    else:
-        sizes = SIZE_PRESETS.get(size_range) or SIZE_PRESETS["startup"]
-    # Merge + de-dupe scorer hints from both pickers.
-    hints, hseen = [], set()
-    for h in industry_hints(ind) + trait_hints(trt):
-        if h not in hseen:
-            hseen.add(h)
-            hints.append(h)
-    return kw, loc, sizes, (hints or None)
+
+def _per_brand_for(roles):
+    """Execs to keep per brand = the number of POC roles ticked (each ticked role
+    is one decision-maker to pull per company). Nothing ticked -> the default
+    buyer-set depth (5). Clamped to 1..10.
+
+    This is a per-company CAP only. It no longer multiplies the run size — the
+    number of leads the operator asks for is the exact total (see _lead_target)."""
+    n = len(_slugs(roles))
+    return min(10, n) if n else 5
+
+
+def _pull_size(count, mode, per_brand, leads=0, brands=0):
+    """How many leads a pull must import, and which reading of `count` produced
+    it. Returns (total, mode).
+
+    The number box has TWO meanings and the operator picks which:
+
+      mode 'companies' (default) — `count` is COMPANIES and the ticked POC roles
+          multiply it: 22 companies x 3 roles = 66 leads. One number gives a
+          whole brand set, which is the point — you get breadth of accounts for
+          very little input.
+      mode 'leads' — `count` is the exact lead total; the company count is
+          derived from it (at most `per_brand` people per firm).
+
+    Either way the form shows the resulting total live before you spend a
+    credit, so the number can never mean something other than it looks.
+    `leads` / `brands` are the legacy field names and still work."""
+    per_brand = max(1, int(per_brand or 1))
+    n = int(count or 0)
+    if n <= 0 and int(leads or 0) > 0:
+        n, mode = int(leads), "leads"
+    if n <= 0 and int(brands or 0) > 0:
+        n, mode = int(brands), "companies"
+    if n <= 0:
+        n, mode = 20, "leads"
+    mode = "leads" if mode == "leads" else "companies"
+    total = n * per_brand if mode == "companies" else n
+    return max(1, min(500, total)), mode
+
+
+def _apollo_filters(industries, roles, sizes, hqs):
+    """Shared parsing for the Apollo form fields (all four are comma-joined slug
+    lists from the multi-selects). Returns
+    (titles, seniorities, keyword_tags, locations, size_ranges, niche, naics):
+
+      • roles      -> exact person_titles + the seniority band they live in.
+      • industries -> Apollo keyword tags (bias the free search) + the strict
+                      niche gate (icp.build_niche) that decides, before AND after
+                      the reveal, whether a company really is in that vertical.
+      • sizes      -> headcount ranges (nothing ticked = all four buckets).
+      • hqs        -> company HQ locations (nothing ticked = no location filter).
+    Nothing picked for industry falls back to the broad-ICP DEFAULT_KEYWORDS."""
+    ind = _slugs(industries)
+    role_slugs = _slugs(roles)
+    titles = role_titles(role_slugs)                 # None -> DEFAULT_TITLES
+    seniorities = role_seniorities(role_slugs)        # union / defaults downstream
+    # Keyword tags: any explicit industry pick replaces the broad default so
+    # "Fintech" means fintech, not fintech + everything.
+    kw = industry_tags(ind) or list(DEFAULT_KEYWORDS)
+    size_ranges = size_ranges_for(_slugs(sizes))     # None ticked -> all buckets
+    loc = hq_locations(_slugs(hqs))                   # None ticked -> no filter
+    niche = niche_spec(ind)
+    # Apollo-side hard industry filter for the picked verticals (see
+    # apollo.industry_naics). This is what keeps the SEARCH on-niche instead of
+    # relying on the free gate to throw 85% of every page away.
+    naics = industry_naics(ind) or None
+    return titles, seniorities, kw, loc, size_ranges, niche, naics
 
 
 @app.post("/leads/apollo_preview", response_class=HTMLResponse)
-def apollo_preview(request: Request, brands: int = Form(20),
-                   per_brand: int = Form(5), industries: str = Form(""),
-                   traits: str = Form(""),
-                   locations: str = Form(""), size_range: str = Form("startup"),
-                   size_min: str = Form(""), size_max: str = Form(""),
-                   remote_first: str = Form("")):
-    """Free search-only preview: show who Apollo has, grouped by brand, before
-    spending any credits. (The remote-first preference only affects scoring on
-    import — Apollo can't detect remote in the free preview — so it's carried
-    through here purely to keep the checkbox state.)"""
+def apollo_preview(request: Request, count: int = Form(0),
+                   mode: str = Form("companies"), leads: int = Form(0),
+                   brands: int = Form(0),
+                   roles: str = Form(""), sizes: str = Form(""),
+                   industries: str = Form(""), hqs: str = Form("")):
+    """Free search-only preview: exactly the leads a pull would import — same
+    lead target, same per-brand cap and the same niche gate — before spending any
+    credits. Execs-per-brand is a CAP; the lead count is the total."""
     db = SessionLocal()
     try:
-        brands = max(1, min(100, brands))
-        per_brand = max(1, min(10, per_brand))
-        kw, loc, sizes, _hints = _apollo_filters(industries, traits,
-                                                 locations, size_range,
-                                                 size_min, size_max)
-        preview = preview_apollo(keywords=kw, locations=loc, size_ranges=sizes,
-                                 brands=brands, per_brand=per_brand)
-        pf = {"industries": industries, "traits": traits,
-              "locations": locations, "size_range": size_range,
-              "size_min": size_min, "size_max": size_max,
-              "brands": brands, "per_brand": per_brand,
-              "remote_first": (remote_first == "on")}
+        per_brand = _per_brand_for(roles)
+        want, mode = _pull_size(count, mode, per_brand, leads, brands)
+        titles, sen, kw, loc, size_ranges, niche, naics = _apollo_filters(
+            industries, roles, sizes, hqs)
+        preview = preview_apollo(titles=titles, seniorities=sen, keywords=kw,
+                                 locations=loc, size_ranges=size_ranges,
+                                 per_brand=per_brand, target_total=want,
+                                 target_hints=niche, naics=naics)
+        pf = {"industries": industries, "roles": roles, "sizes": sizes,
+              "hqs": hqs, "count": count or want, "mode": mode,
+              "leads": want, "per_brand": per_brand}
         return templates.TemplateResponse(request, "leads.html", _leads_ctx(
             request, db, preview=preview, preview_filters=pf))
     finally:
@@ -855,35 +911,40 @@ def leads_import_sent(mailbox_id: int = Form(...),
 
 
 @app.post("/leads/apollo_pull")
-def apollo_pull(brands: int = Form(20), per_brand: int = Form(5),
-                industries: str = Form(""), traits: str = Form(""),
-                locations: str = Form(""), size_range: str = Form("startup"),
-                size_min: str = Form(""), size_max: str = Form(""),
-                remote_first: str = Form("")):
-    """Pull the top `per_brand` execs at up to `brands` companies from Apollo
-    (default ICP). Enforces the per-brand cap + brand scope, and runs the same
-    verify/dedupe/suppression gates plus the ICP + genuine-location gates.
-    `remote_first` biases scoring toward remote/distributed-team companies."""
+def apollo_pull(count: int = Form(0), mode: str = Form("companies"),
+                leads: int = Form(0), brands: int = Form(0),
+                roles: str = Form(""),
+                sizes: str = Form(""), industries: str = Form(""),
+                hqs: str = Form("")):
+    """Pull EXACTLY `leads` sendable leads from Apollo, restricted to the ticked
+    POC roles / sizes / industries / HQ locations. The ticked POC roles are the
+    per-company CAP (max that many people at one firm), not a multiplier — the
+    number the operator typed is the total imported. Enforces that cap, and runs
+    the verify/dedupe/suppression gates plus the niche + ICP + location gates."""
     db = SessionLocal()
     try:
-        brands = max(1, min(100, brands))
-        per_brand = max(1, min(10, per_brand))
-        kw, loc, sizes, hints = _apollo_filters(industries, traits,
-                                                locations, size_range,
-                                                size_min, size_max)
-        s = pull_apollo(db, keywords=kw, locations=loc, size_ranges=sizes,
-                        brands=brands, per_brand=per_brand, target_hints=hints,
-                        prefer_remote=(remote_first == "on"))
+        per_brand = _per_brand_for(roles)
+        want, mode = _pull_size(count, mode, per_brand, leads, brands)
+        titles, sen, kw, loc, size_ranges, niche, naics = _apollo_filters(
+            industries, roles, sizes, hqs)
+        s = pull_apollo(db, titles=titles, seniorities=sen, keywords=kw,
+                        locations=loc, size_ranges=size_ranges,
+                        per_brand=per_brand, target_total=want,
+                        target_hints=niche, naics=naics)
         loc_skips = s["skipped_location"] + s["skipped_location_prereveal"]
         return RedirectResponse(
-            f"/leads?pulled=1&brands={s['brands']}&per_brand={s['per_brand']}"
+            f"/leads?pulled=1&want={s['target_total']}&per_brand={s['per_brand']}"
+            f"&mode={mode}"
             f"&brands_filled={s['brands_filled']}&fetched={s['fetched']}"
             f"&imported={s['imported']}&brand_full={s['skipped_brand_full']}"
             f"&dupe={s['skipped_duplicate']}&no_email={s['no_email']}"
             f"&icp={s['skipped_icp'] + s['skipped_prescreen']}"
             f"&loc={loc_skips}&reveals={s['reveals']}"
             f"&known={s['skipped_known'] + s['skipped_identity']}"
-            f"&officp={s['off_icp_kept']}"
+            f"&savedpre={s['skipped_brand_full_prereveal'] + s['skipped_scope_prereveal']}"
+            f"&nichepre={s['skipped_niche_prereveal'] + s['skipped_prescreen']}"
+            f"&locpre={s['skipped_location_prereveal']}"
+            f"&pages={s['pages']}&stop={s['stop_reason']}"
             f"&exhausted={1 if s['exhausted'] else 0}",
             status_code=303)
     finally:
@@ -928,7 +989,7 @@ def _parse_addrs(raw: str) -> list:
 @app.post("/leads/{lead_id}/send")
 def send_one_lead(request: Request, lead_id: int, step: int = Form(...),
                   mailbox_id: str = Form(""), cc: str = Form(""),
-                  bcc: str = Form("")):
+                  bcc: str = Form(""), mailer: str = Form("")):
     """Send one specific email (first email, or a chosen follow-up) to a single
     lead, right now, from the chosen mailbox. Auto-enrolls on the first send.
     (Follow-ups always go from the mailbox that started the thread.)
@@ -950,8 +1011,8 @@ def send_one_lead(request: Request, lead_id: int, step: int = Form(...),
         enr = _ensure_enrollment(db, lead, mb)
         if not enr:
             return RedirectResponse("/leads?one=no_sequence", status_code=303)
-        result = send_enrollment_step(db, enr, step,
-                                      cc=_parse_addrs(cc), bcc=_parse_addrs(bcc))
+        result = send_enrollment_step(db, enr, step, cc=_parse_addrs(cc),
+                                      bcc=_parse_addrs(bcc), mailer=mailer)
         db.commit()
         return RedirectResponse(f"/leads?one={result}", status_code=303)
     finally:
@@ -961,7 +1022,7 @@ def send_one_lead(request: Request, lead_id: int, step: int = Form(...),
 @app.post("/leads/send_selected")
 def send_selected(request: Request, step: int = Form(...), ids: str = Form(""),
                   mailbox_id: str = Form(""), cc: str = Form(""),
-                  bcc: str = Form("")):
+                  bcc: str = Form(""), mailer: str = Form("")):
     """Send ONE step to every selected lead that's ready for it, from the chosen
     mailbox. Because the step is fixed, everyone in a click gets the same email —
     first emails are never mixed with follow-ups. If 'spread across all' is
@@ -1001,7 +1062,8 @@ def send_selected(request: Request, step: int = Form(...), ids: str = Form(""),
             if not enr:
                 c["skipped"] += 1
                 continue
-            r = send_enrollment_step(db, enr, step, cc=cc_list, bcc=bcc_list)
+            r = send_enrollment_step(db, enr, step, cc=cc_list, bcc=bcc_list,
+                                     mailer=mailer)
             if r == "sent":
                 c["sent"] += 1
             elif r == "no_mailbox":
@@ -1057,7 +1119,7 @@ def analytics_page(request: Request):
 
 # ---------------- Sequences ----------------
 @app.get("/sequences", response_class=HTMLResponse)
-def sequences_page(request: Request):
+def sequences_page(request: Request, m: str = "", saved: int = 0):
     db = SessionLocal()
     try:
         seqs = db.query(Sequence).all()
@@ -1070,7 +1132,10 @@ def sequences_page(request: Request):
                 cadence = fus[0].wait_days
         return templates.TemplateResponse(request, "sequences.html",
                                           ctx(request, db, sequences=seqs,
-                                              cadence=cadence))
+                                              cadence=cadence,
+                                              mailers=mailers_grouped(db),
+                                              selected_mailer=m,
+                                              mailer_saved=bool(saved)))
     finally:
         db.close()
 
@@ -1104,6 +1169,23 @@ def update_step(step_id: int, subject: str = Form(""), body: str = Form(...),
             step.wait_days = wait_days
             db.commit()
         return RedirectResponse("/sequences", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/sequences/mailer/{slug}")
+def update_mailer(slug: str, subject: str = Form(""), body: str = Form(...)):
+    """Save an edit to one of the 8 first-touch mailer variants. The saved
+    subject/body become exactly what gets sent when this variant is picked on the
+    Leads page. Redirects back with the edited variant pre-selected."""
+    db = SessionLocal()
+    try:
+        m = get_mailer(db, slug)
+        if m:
+            m.subject = subject.strip()
+            m.body = body
+            db.commit()
+        return RedirectResponse(f"/sequences?m={slug}&saved=1", status_code=303)
     finally:
         db.close()
 

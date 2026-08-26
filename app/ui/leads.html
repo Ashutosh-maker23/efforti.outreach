@@ -60,7 +60,7 @@
   {% else %}
   <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
     <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span>{% if rescore_result.n %}<strong style="color:var(--ok)">Re-scoring {{rescore_result.n}} lead{{'' if rescore_result.n==1 else 's'}} in the background</strong> — re-ranking every lead on the POC-title tiering (CEO/Founder/COO/CoS/CFO/CPO climb, managers sink). Free Apollo lookup, no credits. Refresh in a moment to see the ICP badges and order update.{% else %}<strong style="color:var(--ok)">No leads to re-score.</strong>{% endif %}</span>
+    <span>{% if rescore_result.n %}<strong style="color:var(--ok)">Re-scoring {{rescore_result.n}} lead{{'' if rescore_result.n==1 else 's'}} in the background</strong> — re-ranking every lead on the rebuilt ICP (engineering / delivery / IT leaders — CxO and VP/Head/Director — climb; off-ICP industries and ICs sink; large enterprises no longer penalised). Free Apollo lookup, no credits. Refresh in a moment to see the ICP badges and order update.{% else %}<strong style="color:var(--ok)">No leads to re-score.</strong>{% endif %}</span>
   </div>
   {% endif %}
 {% endif %}
@@ -90,11 +90,26 @@
 {% set tone = 'var(--ok)' if ok else 'var(--warn)' %}
 <div class="note-box" style="background:color-mix(in srgb,{{tone}} 12%,transparent);border-color:color-mix(in srgb,{{tone}} 30%,transparent);margin-bottom:22px">
   <svg viewBox="0 0 24 24" fill="none" stroke="{{tone}}">{% if ok %}<path d="M20 6 9 17l-5-5"/>{% else %}<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>{% endif %}</svg>
-  <span><strong style="color:{{tone}}">Imported {{pull_result.imported}} exec{{'' if pull_result.imported==1 else 's'}} into your pipeline · {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} used.</strong>
-  {% if pull_result.known %}<strong>{{pull_result.known}} already-owned skipped free</strong> (0 credits — no re-reveal). {% endif %}
-  {% if pull_result.off_icp_kept %}{{pull_result.off_icp_kept}} off-ICP contact{{'' if pull_result.off_icp_kept==1 else 's'}} <strong>kept</strong> (nothing wasted — find them under <em>Status → Off-ICP (kept)</em>). {% endif %}
-  Target {{pull_result.per_brand}}×{{pull_result.brands}} ({{pull_result.target_total}} max) · scanned {{pull_result.fetched}} · {{pull_result.dupe}} duplicate · {{pull_result.no_email}} without an email.
-  {% if not ok %}<br><strong>No full ICP match this run.</strong> {% if pull_result.known %}These filters mostly surface leads you already own — broaden <em>Industry focus</em>, <em>Company traits</em>, <em>Locations</em> or <em>Company size</em> to reach fresh brands.{% else %}Try broadening those filters to reach more brands.{% endif %}{% endif %}</span>
+  <span><strong style="color:{{tone}}">Imported {{pull_result.imported}} into your pipeline · {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} used</strong>{% if pull_result.reveals %} — {{ (100 * pull_result.imported // pull_result.reveals) }}% of the reveals were a fit{% endif %}.
+  <br><span class="muted" style="font-size:12.5px;line-height:1.6">
+    <strong>Where your {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} went</strong> (1 credit = 1 reveal):
+    <strong style="color:var(--ok)">{{pull_result.imported}}</strong> became sendable leads ·
+    <strong>{{pull_result.discarded}}</strong> discarded (off-niche, below-bar, wrong HQ, or already yours — nothing is kept aside).
+    {% if pull_result.saved_pre %}<br><strong style="color:var(--ok)">✓ {{pull_result.saved_pre}} duplicate-brand contact{{'' if pull_result.saved_pre==1 else 's'}} skipped BEFORE revealing — those credits were saved</strong> (we cap execs-per-brand before paying).{% endif %}
+    {% if pull_result.known %}<br>{{pull_result.known}} already-owned skipped free (0 credits — no re-reveal).{% endif %}
+    <br>Asked for {{pull_result.target_total}} lead{{'' if pull_result.target_total==1 else 's'}}{% if pull_result.mode == 'companies' %} ({{ (pull_result.target_total / pull_result.per_brand) | round(0, 'ceil') | int }} brands × {{pull_result.per_brand}} roles){% else %} (max {{pull_result.per_brand}} per company){% endif %} · scanned {{pull_result.fetched}} contacts over {{pull_result.pages}} page{{'' if pull_result.pages==1 else 's'}}.
+    {% if pull_result.imported < pull_result.target_total %}
+    <br><strong>Short of the target by {{pull_result.target_total - pull_result.imported}}.</strong>
+    {% set stop = pull_result.stop_reason %}
+    {% if stop == 'pool exhausted' %}Apollo has no more contacts matching these filters — <strong>broaden</strong> Roles, Industry focus, Company HQ or Company size.
+    {% elif stop == 'no fresh candidates' %}Every remaining contact on these filters is <strong>already in your pipeline</strong> or was filtered out for free. Broaden the filters to reach fresh brands.
+    {% elif stop == 'reveal budget' %}The reveal budget ({{pull_result.reveals}} credits) ran out before the target — <strong>re-run to continue</strong> from where it stopped.
+    {% elif stop == 'scan budget' %}The scan budget ran out before the target — <strong>re-run to continue</strong>.
+    {% else %}Re-run to continue, or broaden the filters.{% endif %}
+    <br><span style="opacity:.85">Free funnel: {{pull_result.fetched}} scanned → {{pull_result.known}} already yours → {% if pull_result.niche_pre %}{{pull_result.niche_pre}} off-niche{% endif %}{% if pull_result.loc_pre %}{% if pull_result.niche_pre %} · {% endif %}{{pull_result.loc_pre}} wrong HQ{% endif %}{% if pull_result.saved_pre %}{% if pull_result.niche_pre or pull_result.loc_pre %} · {% endif %}{{pull_result.saved_pre}} brand already full{% endif %} dropped before paying → <strong>{{pull_result.reveals}} revealed</strong> → {{pull_result.imported}} kept.</span>
+    {% endif %}
+  </span>
+  {% if not ok %}<br><strong>No fit this run.</strong> Broaden <em>Roles</em>, <em>Industry focus</em>, <em>Company HQ</em> or <em>Company size</em> to reach fresh brands.{% endif %}</span>
 </div>
 {% endif %}
 
@@ -131,38 +146,49 @@
   <div class="card">
     <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Pull from Apollo</h2>
     <form method="post" id="apolloForm">
-      <div style="display:flex;gap:12px">
-        <div style="flex:1">
-          <label>Brands (companies)</label>
-          <input type="number" name="brands" id="apBrands" value="20" min="1" max="100">
-        </div>
-        <div style="flex:1">
-          <label>Execs per brand</label>
-          <input type="number" name="per_brand" id="apPer" value="5" min="1" max="10">
-        </div>
-      </div>
-      <label style="margin-top:12px">Company size</label>
-      {% set szr = preview_filters.size_range if preview_filters is defined else 'startup' %}
-      <select name="size_range" id="apSize">
-        <option value="seed"{{ ' selected' if szr=='seed' }}>Seed (1–20)</option>
-        <option value="startup"{{ ' selected' if szr=='startup' or not szr }}>Startup (21–200) · default ICP</option>
-        <option value="growth"{{ ' selected' if szr=='growth' }}>Growth (201–1,000)</option>
-        <option value="midmarket"{{ ' selected' if szr=='midmarket' }}>Mid-market (1,000–5,000)</option>
-        <option value="any"{{ ' selected' if szr=='any' }}>Any size</option>
-        <option value="custom"{{ ' selected' if szr=='custom' }}>Custom headcount…</option>
-      </select>
-      <div id="apSizeCustom" style="display:{{ 'flex' if szr=='custom' else 'none' }};gap:12px;margin-top:10px">
-        <div style="flex:1">
-          <label style="margin-top:0">Min people</label>
-          <input type="number" name="size_min" id="apSizeMin" min="1" max="100000"
-                 value="{{ preview_filters.size_min if (preview_filters is defined and preview_filters.size_min) else '40' }}">
-        </div>
-        <div style="flex:1">
-          <label style="margin-top:0">Max people</label>
-          <input type="number" name="size_max" id="apSizeMax" min="1" max="100000"
-                 value="{{ preview_filters.size_max if (preview_filters is defined and preview_filters.size_max) else '60' }}">
+      <div>
+        <label>How much to pull <span class="muted">— pick what the number means; the running total is shown below</span></label>
+        <div style="display:flex;gap:10px">
+          <input type="number" name="count" id="apCount" style="flex:0 0 110px" value="{{ preview_filters.count if preview_filters is defined else 20 }}" min="1" max="500">
+          <select name="mode" id="apMode" style="flex:1">
+            <option value="companies" {{ 'selected' if (preview_filters is not defined or preview_filters.mode != 'leads') }}>brands (companies) × the POC roles ticked</option>
+            <option value="leads" {{ 'selected' if (preview_filters is defined and preview_filters.mode == 'leads') }}>leads — exactly this many, total</option>
+          </select>
         </div>
       </div>
+      {# ---- POC roles: which decision-makers to pull ---- #}
+      {% set selrole = preview_filters.roles.split(',') if (preview_filters is defined and preview_filters.roles) else [] %}
+      <label style="margin-top:12px">POC — roles to pull <span class="muted">(tick the buyers; none ticked = strongest default set across CxO + delivery leaders)</span></label>
+      <div class="msel" id="roleMsel">
+        <button type="button" class="msel-btn" id="roleBtn" aria-haspopup="listbox" aria-expanded="false">
+          <span id="roleBtnLabel">Best-fit buyers (default)</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="msel-panel" id="rolePanel" role="listbox" aria-multiselectable="true">
+          {% set ns_role = namespace(group='') %}
+          {% for opt in role_options %}
+            {% if opt.group and opt.group != ns_role.group %}<div class="msel-group">{{opt.group}}</div>{% set ns_role.group = opt.group %}{% endif %}
+          <label class="msel-opt"><input type="checkbox" class="rolecb" value="{{opt.slug}}"{{ ' checked' if opt.slug in selrole }}><span>{{opt.label}}</span></label>
+          {% endfor %}
+        </div>
+        <input type="hidden" name="roles" id="roleHidden" value="{{ preview_filters.roles if preview_filters is defined else '' }}">
+      </div>
+      {# ---- Sizing: headcount buckets ---- #}
+      {% set selsize = preview_filters.sizes.split(',') if (preview_filters is defined and preview_filters.sizes) else [] %}
+      <label style="margin-top:12px">Company size <span class="muted">(headcount — none ticked = all buckets; large enterprises are in scope)</span></label>
+      <div class="msel" id="sizeMsel">
+        <button type="button" class="msel-btn" id="sizeBtn" aria-haspopup="listbox" aria-expanded="false">
+          <span id="sizeBtnLabel">All sizes</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="msel-panel" id="sizePanel" role="listbox" aria-multiselectable="true">
+          {% for opt in size_options %}
+          <label class="msel-opt"><input type="checkbox" class="sizecb" value="{{opt.slug}}"{{ ' checked' if opt.slug in selsize }}><span>{{opt.label}}</span></label>
+          {% endfor %}
+        </div>
+        <input type="hidden" name="sizes" id="sizeHidden" value="{{ preview_filters.sizes if preview_filters is defined else '' }}">
+      </div>
+      {# ---- Industry focus ---- #}
       {% set selind = preview_filters.industries.split(',') if (preview_filters is defined and preview_filters.industries) else [] %}
       <label style="margin-top:12px">Industry focus <span class="muted">(pick one or more — drives the Apollo search <em>and</em> the ICP score)</span></label>
       <div class="msel" id="indMsel">
@@ -177,29 +203,24 @@
         </div>
         <input type="hidden" name="industries" id="indHidden" value="{{ preview_filters.industries if preview_filters is defined else '' }}">
       </div>
-      {% set seltrt = preview_filters.traits.split(',') if (preview_filters is defined and preview_filters.traits) else [] %}
-      <label style="margin-top:12px">Company traits <span class="muted">(optional — who they sell to &amp; how they operate; also steers the ICP score)</span></label>
-      <div class="msel" id="traitMsel">
-        <button type="button" class="msel-btn" id="traitBtn" aria-haspopup="listbox" aria-expanded="false">
-          <span id="traitBtnLabel">Any (no trait filter)</span>
+      {# ---- Company HQ ---- #}
+      {% set selhq = preview_filters.hqs.split(',') if (preview_filters is defined and preview_filters.hqs) else ['india'] %}
+      <label style="margin-top:12px">Company HQ <span class="muted">(headquarters — India is primary; add others to diversify)</span></label>
+      <div class="msel" id="hqMsel">
+        <button type="button" class="msel-btn" id="hqBtn" aria-haspopup="listbox" aria-expanded="false">
+          <span id="hqBtnLabel">Any HQ</span>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
         </button>
-        <div class="msel-panel" id="traitPanel" role="listbox" aria-multiselectable="true">
-          {% for opt in company_traits %}
-          <label class="msel-opt"><input type="checkbox" class="traitcb" value="{{opt.slug}}"{{ ' checked' if opt.slug in seltrt }}><span>{{opt.label}}</span></label>
+        <div class="msel-panel" id="hqPanel" role="listbox" aria-multiselectable="true">
+          {% for opt in hq_options %}
+          <label class="msel-opt"><input type="checkbox" class="hqcb" value="{{opt.slug}}"{{ ' checked' if opt.slug in selhq }}><span>{{opt.label}}</span></label>
           {% endfor %}
         </div>
-        <input type="hidden" name="traits" id="traitHidden" value="{{ preview_filters.traits if preview_filters is defined else '' }}">
+        <input type="hidden" name="hqs" id="hqHidden" value="{{ preview_filters.hqs if preview_filters is defined else 'india' }}">
       </div>
-      <label style="margin-top:12px">Company HQ locations <span class="muted">(optional — filters by the company's real headquarters)</span></label>
-      <input type="text" name="locations" value="{{ preview_filters.locations if preview_filters is defined else '' }}" placeholder="India, United States">
-      <label style="display:flex;align-items:center;gap:9px;font-weight:600;margin-top:14px;cursor:pointer">
-        <input type="checkbox" name="remote_first" value="on" style="width:auto"{{ ' checked' if preview_filters is defined and preview_filters.remote_first }}>
-        Prefer remote-first / distributed teams <span class="muted" style="font-weight:400">— Efforti's best-fit buyer; ranks them to the top</span>
-      </label>
       <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-top:14px">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-        <span>Targets the <strong>top 5 decision-makers</strong> per brand: CEO/Founder · COO · Chief of Staff · CFO · CPO — <strong>verified emails only</strong>, exact titles. Every revealed contact is <strong>ICP-checked</strong> (industry, real headcount, funding &amp; startup signals) and, when you set locations, its <strong>real HQ is verified</strong> so Apollo's overseas leaks are dropped. No industry or trait picked = a broad-tech default; <strong>Industry focus</strong> (what they build) and <strong>Company traits</strong> (who they sell to / how they operate) both narrow the search and steer the score. <strong>Remote-first</strong>, when ticked, boosts distributed-team companies and drops clearly co-located ones below the bar (detected on import — Apollo has no remote filter). Scope this pull: <strong id="apScope">up to 100 execs</strong>. <strong>Preview is free</strong> — reveal on import costs ~1 credit each.</span>
+        <span>Targets Efforti's real buyers — <strong>engineering / delivery / program / IT leaders</strong> (CxO <em>and</em> VP/Head/Director) at scaled tech, IT-services, GCC, BFSI &amp; engineering orgs. <strong>Verified emails only</strong>, exact titles. Every revealed contact is <strong>ICP-scored</strong> (industry fit · title tier · engineering-delivery signal · scale) and its <strong>real HQ is verified</strong> so Apollo's overseas leaks are dropped. Large enterprises are <strong>in scope</strong> — headcount is never a reject. Scope this pull: <strong id="apScope">20 brands × 5 roles = 100 leads</strong>. <strong>Preview is free</strong> — reveal on import costs ~1 credit each.</span>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px">
         <button class="btn ghost" formaction="/leads/apollo_preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Preview</button>
@@ -208,21 +229,30 @@
     </form>
     <script>
       (function(){
-        var b=document.getElementById('apBrands'),p=document.getElementById('apPer'),
+        var b=document.getElementById('apCount'),
+            m=document.getElementById('apMode'),
             s=document.getElementById('apScope');
-        function upd(){var n=(+b.value||0)*(+p.value||0);
-          s.textContent='up to '+n+' exec'+(n===1?'':'s');}
-        b.addEventListener('input',upd);p.addEventListener('input',upd);upd();
+        // The ticked POC roles are the per-company cap. In 'brands' mode they
+        // also MULTIPLY the number typed (22 brands x 3 roles = 66 leads); in
+        // 'leads' mode the number IS the total. Either way the real total is
+        // spelled out here before a credit is spent.
+        function perBrand(){var n=document.querySelectorAll('#rolePanel .rolecb:checked').length;return n||5;}
+        function upd(){var n=+b.value||0, k=perBrand();
+          if(m.value==='leads'){
+            s.textContent='exactly '+n+' lead'+(n===1?'':'s')+
+              ' (max '+k+' per company, so '+Math.ceil(n/k)+'+ companies)';
+          } else {
+            s.textContent=n+' brand'+(n===1?'':'s')+' × '+k+' role'+
+              (k===1?'':'s')+' = '+(n*k)+' lead'+(n*k===1?'':'s');
+          }}
+        b.addEventListener('input',upd);
+        m.addEventListener('change',upd);
+        document.querySelectorAll('#rolePanel .rolecb').forEach(function(c){c.addEventListener('change',upd);});
+        upd();
 
-        // Show the Min/Max people inputs only when "Custom headcount" is picked.
-        var szSel=document.getElementById('apSize'),
-            szCustom=document.getElementById('apSizeCustom');
-        function szToggle(){szCustom.style.display=(szSel.value==='custom')?'flex':'none';}
-        szSel.addEventListener('change',szToggle);szToggle();
-
-        // Reusable multi-select wiring — drives BOTH the Industry and the
-        // Company-traits pickers. Each maps its checkboxes -> a hidden field +
-        // a summary label; only one panel is open at a time.
+        // Reusable multi-select wiring — drives the Roles, Sizing, Industry and
+        // HQ pickers. Each maps its checkboxes -> a hidden field + a summary
+        // label; only one panel is open at a time.
         var msels=[];
         function closeAll(){msels.forEach(function(m){
           m.root.classList.remove('open');
@@ -254,8 +284,10 @@
           msels.push({root:root,btn:btn});
           sync();
         }
-        wireMsel('ind','Broad tech (default ICP)','industries');
-        wireMsel('trait','Any (no trait filter)','traits');
+        wireMsel('role','Best-fit buyers (default)','roles');
+        wireMsel('size','All sizes','sizes');
+        wireMsel('ind','Choose industries…','industries');
+        wireMsel('hq','Any HQ','locations');
         document.addEventListener('click',closeAll);
       })();
     </script>
@@ -301,7 +333,7 @@
       <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>Complete brand names &amp; ICP scores</button>
     </form>
     <form method="post" action="/leads/rescore" style="margin-top:14px;border-top:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding-top:14px">
-      <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Re-score <strong style="color:var(--text-2)">every</strong> lead on the current ICP rules — the <strong style="color:var(--text-2)">POC-title tiering</strong> where CEO/Founder, COO, Chief of Staff, CFO &amp; CPO rank highest and <strong style="color:var(--text-2)">managers / ICs sink to the bottom</strong>. Nothing is hidden or removed — leads only <strong style="color:var(--text-2)">re-rank</strong> by the new score. Free Apollo domain lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
+      <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Re-score <strong style="color:var(--text-2)">every</strong> lead on the rebuilt ICP — <strong style="color:var(--text-2)">engineering / delivery / IT leaders</strong> (CxO <em>and</em> VP/Head/Director) at scaled tech / IT-services / GCC / BFSI / engineering orgs rank highest; off-ICP industries and individual contributors sink; <strong style="color:var(--text-2)">large enterprises are no longer penalised</strong>. Nothing is hidden or removed — leads only <strong style="color:var(--text-2)">re-rank</strong> by the new score. Free Apollo domain lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
       <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18M7 12h10m-7 6h4"/></svg>Re-score ICP by POC title</button>
     </form>
   </div>
@@ -314,17 +346,17 @@
 {% else %}
 <div class="card" style="margin-bottom:16px">
   <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+    <div><span style="font-size:28px;font-weight:750">{{preview.contacts}}</span> <span class="muted">leads (of {{preview.want_total}} asked for)</span></div>
     <div><span style="font-size:28px;font-weight:750">{{preview.brands_found}}</span> <span class="muted">brands</span></div>
-    <div><span style="font-size:28px;font-weight:750">{{preview.contacts}}</span> <span class="muted">top execs</span></div>
     <div><span style="font-size:28px;font-weight:750;color:var(--accent-ink)">{{preview.with_email}}</span> <span class="muted">have an email</span></div>
+    {% if preview.skipped_niche %}<div><span style="font-size:28px;font-weight:750">{{preview.skipped_niche}}</span> <span class="muted">off-niche dropped (free)</span></div>{% endif %}
     <form method="post" action="/leads/apollo_pull" style="margin-left:auto">
       <input type="hidden" name="industries" value="{{preview_filters.industries}}">
-      <input type="hidden" name="traits" value="{{preview_filters.traits}}">
-      <input type="hidden" name="locations" value="{{preview_filters.locations}}">
-      <input type="hidden" name="size_range" value="{{preview_filters.size_range}}">
-      <input type="hidden" name="brands" value="{{preview_filters.brands}}">
-      <input type="hidden" name="per_brand" value="{{preview_filters.per_brand}}">
-      <input type="hidden" name="remote_first" value="{{ 'on' if preview_filters.remote_first else '' }}">
+      <input type="hidden" name="roles" value="{{preview_filters.roles}}">
+      <input type="hidden" name="sizes" value="{{preview_filters.sizes}}">
+      <input type="hidden" name="hqs" value="{{preview_filters.hqs}}">
+      <input type="hidden" name="count" value="{{preview_filters.count}}">
+      <input type="hidden" name="mode" value="{{preview_filters.mode}}">
       <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>Import these — reveal up to {{preview.with_email}} emails (~{{preview.with_email}} credits)</button>
     </form>
   </div>
@@ -401,6 +433,9 @@ td .btn.sm{white-space:nowrap}
   font-size:13px;font-weight:500;cursor:pointer}
 .msel-opt:hover{background:var(--surface-3)}
 .msel-opt input{width:16px;height:16px;margin:0;accent-color:var(--accent);cursor:pointer;flex-shrink:0}
+.msel-group{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--text-3);padding:8px 10px 3px;margin-top:2px}
+.msel-group:first-child{margin-top:0}
 .icpb{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:99px;
   margin-left:6px;letter-spacing:.02em;cursor:help;white-space:nowrap}
 .icpb.hi{background:var(--ok-soft);color:var(--ok)}
@@ -431,6 +466,19 @@ td .btn.sm{white-space:nowrap}
   {% else %}
   <span class="muted">No active mailbox — <a href="/mailboxes">add one</a> to send.</span>
   {% endif %}
+</div>
+
+<div class="sendfrom">
+  <label for="mailerSel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M4 8h16M8 12h8M8 16h5"/></svg>Mailer</label>
+  <select id="mailerSel">
+    <option value="">Sequence default (first email)</option>
+    {% for group_label, items in mailers %}
+    <optgroup label="{{group_label}}">
+      {% for m in items %}<option value="{{m.slug}}">{{m.label}} — “{{m.subject}}”</option>{% endfor %}
+    </optgroup>
+    {% endfor %}
+  </select>
+  <span class="muted" style="font-size:11.5px">Which of the 8 first-touch variants to send — pick O&amp;M or Construction/EPC by angle. Applies to <strong>first emails only</strong>; follow-ups use the sequence copy.</span>
 </div>
 
 {% if actives %}
@@ -472,7 +520,6 @@ td .btn.sm{white-space:nowrap}
         {% for s in ['contacted','replied','bounced','finished'] %}
         <option value="{{s}}" {{ 'selected' if status_filter == s }}>{{ s|capitalize }}</option>
         {% endfor %}
-        <option value="off_icp" {{ 'selected' if status_filter == 'off_icp' }}>Off-ICP (kept)</option>
       </select>
     </div>
   </div>
@@ -491,6 +538,7 @@ function setParam(k,v){var u=new URL(location.href);
 <form id="bulkForm" method="post" action="/leads/send_selected" style="display:none">
   <input type="hidden" name="step" id="bulkStep"><input type="hidden" name="ids" id="bulkIds">
   <input type="hidden" name="mailbox_id" id="bulkMb">
+  <input type="hidden" name="mailer" id="bulkMailer">
   <input type="hidden" name="cc" id="bulkCc"><input type="hidden" name="bcc" id="bulkBcc">
 </form>
 
@@ -545,6 +593,7 @@ function setParam(k,v){var u=new URL(location.href);
           {% elif i == pr.next %}<form class="inline" method="post" action="/leads/{{l.id}}/send">
               <input type="hidden" name="step" value="{{i}}">
               <input type="hidden" name="mailbox_id" class="mbfield" value="{{active_mb.id if active_mb else ''}}">
+              <input type="hidden" name="mailer" class="mailerfield">
               <input type="hidden" name="cc" class="ccfield"><input type="hidden" name="bcc" class="bccfield">
               <button class="btn sm">{{pr.action}}</button></form>
           {% else %}<span class="stp lock" title="earlier email must go first">{{step_labels[i]}}</span>{% endif %}
@@ -587,6 +636,13 @@ function setParam(k,v){var u=new URL(location.href);
     Array.prototype.forEach.call(document.querySelectorAll('.mbfield'),function(f){f.value=v;});}
   if(senderMb)senderMb.addEventListener('change',syncMb);
   syncMb();
+  // First-touch mailer variant -> per-row and bulk first-email sends.
+  var mailerSel=document.getElementById('mailerSel');
+  function mailerVal(){return mailerSel?mailerSel.value:'';}
+  function syncMailer(){var v=mailerVal();
+    Array.prototype.forEach.call(document.querySelectorAll('.mailerfield'),function(f){f.value=v;});}
+  if(mailerSel)mailerSel.addEventListener('change',syncMailer);
+  syncMailer();
   // CC/BCC boxes apply to both the per-row send forms and the bulk send.
   var ccBox=document.getElementById('ccBox'),bccBox=document.getElementById('bccBox');
   function ccVal(){return ccBox?ccBox.value:'';}
@@ -614,6 +670,7 @@ function setParam(k,v){var u=new URL(location.href);
         document.getElementById('bulkStep').value=s;
         document.getElementById('bulkIds').value=ids;
         document.getElementById('bulkMb').value=mbVal();
+        document.getElementById('bulkMailer').value=mailerVal();
         document.getElementById('bulkCc').value=ccVal();
         document.getElementById('bulkBcc').value=bccVal();
         window.guardedSend('/leads/send_selected',
