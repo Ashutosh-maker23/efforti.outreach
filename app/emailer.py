@@ -3,7 +3,10 @@ import base64
 import html as htmllib
 import imaplib
 import os
+import re
+import secrets
 import smtplib
+import urllib.parse
 import uuid
 from email.message import EmailMessage
 from email.utils import formatdate
@@ -173,9 +176,54 @@ def make_message_id(mailbox: Mailbox) -> str:
     return f"<{uuid.uuid4().hex}@{domain}>"
 
 
+# Bare http(s) URLs sitting in the plain-text body. We turn these into clickable
+# anchors in the HTML part and, when tracking is on, route them through the
+# click-redirect so CTR is measurable. Deliberately excludes trailing brackets
+# and quotes; trailing sentence punctuation (.,;:!?) is trimmed back out below.
+_URL_RE = re.compile(r'(https?://[^\s<>()\[\]"\']+)')
+
+
+def _body_to_html(body: str, track_token: str, track: bool) -> str:
+    """Escape the plain-text body into HTML, turning URLs into links. When
+    `track` is on, each link is wrapped through /t/c/<token> so clicks are
+    counted; otherwise the raw URL is used. Only the body is touched — the
+    signature's mailto and the unsubscribe link are added separately and are
+    NEVER rewritten (rewriting the opt-out link would break one-click unsub)."""
+    if not track:
+        # Tracking off: preserve the exact original rendering (no link-wrapping,
+        # no auto-linkify) so a mailbox with tracking disabled sends untouched.
+        return htmllib.escape(body).replace("\n", "<br>")
+    out = []
+    for i, seg in enumerate(_URL_RE.split(body)):
+        if i % 2 == 0:                       # plain text between URLs
+            out.append(htmllib.escape(seg).replace("\n", "<br>"))
+            continue
+        url = seg                            # a matched URL
+        trail = ""
+        m = re.search(r'[.,;:!?]+$', url)    # don't swallow sentence punctuation
+        if m:
+            trail, url = m.group(0), url[:m.start()]
+        href = f"{APP_BASE_URL}/t/c/{track_token}?u={urllib.parse.quote(url, safe='')}"
+        out.append(f'<a href="{htmllib.escape(href)}" '
+                   f'style="color:#1a73e8;text-decoration:underline">'
+                   f'{htmllib.escape(url)}</a>{htmllib.escape(trail)}')
+    return "".join(out)
+
+
+def _open_pixel(track_token: str, track: bool) -> str:
+    """A 1x1 open-tracking pixel for the HTML part, or '' when tracking is off."""
+    if not track:
+        return ""
+    return (f'<img src="{APP_BASE_URL}/t/o/{track_token}.gif" width="1" '
+            'height="1" alt="" style="display:block;width:1px;height:1px;'
+            'border:0;overflow:hidden;opacity:0">')
+
+
 def build_email(mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
                 subject: str, body: str, cc: list = None,
-                bcc: list = None) -> EmailMessage:
+                bcc: list = None, track_token: str = "") -> EmailMessage:
+    # Tracking is opt-in per mailbox AND needs a token to hang the URLs on.
+    track = bool(track_token) and bool(getattr(mailbox, "tracking_on", False))
     msg = EmailMessage()
     msg_id = make_message_id(mailbox)
     msg["Message-ID"] = msg_id
@@ -234,7 +282,8 @@ def build_email(mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
 
     # text/html (carries the branded signature + inline logo). Same order, with
     # the brand blurb as a subtle footer between the signature and the opt-out.
-    body_html = htmllib.escape(body).replace("\n", "<br>")
+    # When tracking is on, body URLs are wrapped for click/CTR measurement.
+    body_html = _body_to_html(body, track_token, track)
     blurb_html = ""
     if BRAND_BLURB:
         blurb_html = (
@@ -249,7 +298,7 @@ def build_email(mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
     html_doc = (
         '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
         f'color:#000000;line-height:1.55">{body_html}{sig_html}{blurb_html}'
-        f'{unsub_html}</div>')
+        f'{unsub_html}{_open_pixel(track_token, track)}</div>')
     msg.add_alternative(html_doc, subtype="html")
 
     # Inline logo: attach it inside the HTML part (multipart/related) so the
@@ -273,8 +322,14 @@ def send(db, mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
     does not need the guard."""
     subject = render(subject_tpl, lead) if subject_tpl else ""
     body = render(body_tpl, lead)
+    # One secret per send, shared by the open-pixel and click-links so both point
+    # back at THIS message row. Reuse the claimed record's token if it already has
+    # one, else mint one. Harmless when the mailbox has tracking off (build_email
+    # just won't use it).
+    track_token = (getattr(record, "track_token", None)
+                   or secrets.token_urlsafe(16))
     msg, msg_id = build_email(mailbox, lead, enrollment, subject, body,
-                              cc=cc, bcc=bcc)
+                              cc=cc, bcc=bcc, track_token=track_token)
 
     if record is None:
         record = Message(
@@ -282,6 +337,7 @@ def send(db, mailbox: Mailbox, lead: Lead, enrollment: Enrollment,
             mailbox_email=mailbox.email, step_index=step_index,
         )
         db.add(record)
+    record.track_token = track_token
     record.subject = msg["Subject"]
     record.body = body
     record.message_id = msg_id

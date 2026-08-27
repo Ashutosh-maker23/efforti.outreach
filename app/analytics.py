@@ -48,17 +48,32 @@ def compute(db, mailbox=None, leads=None):
     msgs = msg_q.all()
 
     # Aggregate per lead from messages
-    per_lead = {}          # email -> {mails, followups, first_sent}
+    per_lead = {}          # email -> {mails, followups, first_sent, opened, clicked}
     step_counts = {}
+    opens_total = clicks_total = tracked_sent = 0
     for m in msgs:
         step_counts[m.step_index] = step_counts.get(m.step_index, 0) + 1
         d = per_lead.setdefault(m.lead_email,
-                                {"mails": 0, "followups": 0, "first_sent": None})
+                                {"mails": 0, "followups": 0, "first_sent": None,
+                                 "opened": False, "clicked": False,
+                                 "tracked": False})
         d["mails"] += 1
         if m.step_index > 0:
             d["followups"] += 1
         if d["first_sent"] is None or m.sent_at < d["first_sent"]:
             d["first_sent"] = m.sent_at
+        # Engagement tracking (opens/clicks). track_token is only set on sends
+        # from a tracking-enabled mailbox, so tracked_sent is the honest
+        # denominator for open/click rates — untracked sends never drag it down.
+        if getattr(m, "track_token", None):
+            tracked_sent += 1
+            d["tracked"] = True
+        opens_total += (getattr(m, "open_count", 0) or 0)
+        clicks_total += (getattr(m, "click_count", 0) or 0)
+        if getattr(m, "opened_at", None):
+            d["opened"] = True
+        if getattr(m, "clicked_at", None):
+            d["clicked"] = True
 
     replies = _reply_times(db)
 
@@ -67,6 +82,17 @@ def compute(db, mailbox=None, leads=None):
     replied = len(replied_emails)
     sent_total = len(msgs)
     followups = sum(1 for m in msgs if m.step_index > 0)
+
+    # Engagement rates, people-based (parallel to reply_rate) and scoped to the
+    # people who were actually tracked, so a mostly-untracked history doesn't
+    # read as "0% open rate". tracked_people is the denominator.
+    tracked_people = sum(1 for d in per_lead.values() if d.get("tracked"))
+    openers = sum(1 for d in per_lead.values() if d["opened"])
+    clickers = sum(1 for d in per_lead.values() if d["clicked"])
+    open_rate = round(openers / tracked_people * 100, 1) if tracked_people else 0
+    ctr = round(clickers / tracked_people * 100, 1) if tracked_people else 0
+    # Click-to-open: of the people who opened, how many clicked (intent signal).
+    click_to_open = round(clickers / openers * 100, 1) if openers else 0
 
     # Average first-response time
     deltas = []
@@ -112,9 +138,13 @@ def compute(db, mailbox=None, leads=None):
             "mails": pl.get("mails", 0),
             "followups": pl.get("followups", 0),
             "contacted_at": fs,
+            "opened": pl.get("opened", False),
+            "clicked": pl.get("clicked", False),
             "response": fmt_delta(rt - fs) if (rt and fs and rt >= fs) else None,
         })
-    rows.sort(key=lambda r: (r["mails"], r["response"] is not None), reverse=True)
+    # Hot leads first: clicked > opened > most touches > replied.
+    rows.sort(key=lambda r: (r["clicked"], r["opened"], r["mails"],
+                             r["response"] is not None), reverse=True)
 
     return {
         "sent_total": sent_total,
@@ -122,6 +152,15 @@ def compute(db, mailbox=None, leads=None):
         "contacted": contacted,
         "replied": replied,
         "reply_rate": round(replied / contacted * 100, 1) if contacted else 0,
+        "tracked_sent": tracked_sent,
+        "tracked_people": tracked_people,
+        "open_rate": open_rate,
+        "ctr": ctr,
+        "click_to_open": click_to_open,
+        "openers": openers,
+        "clickers": clickers,
+        "opens_total": opens_total,
+        "clicks_total": clicks_total,
         "bounced": bounced,
         "bounce_rate": round(bounced / sent_total * 100, 1) if sent_total else 0,
         "unsub": unsub,

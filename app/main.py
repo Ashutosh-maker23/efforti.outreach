@@ -19,7 +19,7 @@ load_dotenv()
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, case, func, or_
 
@@ -29,7 +29,8 @@ from .apollo import (DEFAULT_KEYWORDS, HQ_OPTIONS, INDUSTRY_OPTIONS,
                      hq_locations, industry_naics, industry_tags, niche_spec,
                      preview_apollo, pull_apollo, role_seniorities,
                      role_titles, size_ranges_for)
-from .emailer import signature_preview_html, verify_credentials
+from .emailer import (APP_BASE_URL, send as send_email,
+                      signature_preview_html, verify_credentials)
 from .mailers import get_mailer, mailers_grouped, seed_mailers
 from .importer import import_csv, import_from_sent
 from .research import research_companies
@@ -1309,6 +1310,85 @@ def toggle_mailbox(mailbox_id: int):
         db.close()
 
 
+@app.post("/mailboxes/{mailbox_id}/tracking")
+def toggle_tracking(mailbox_id: int):
+    """Turn open/click tracking on or off for one mailbox. Off by default —
+    pixels and wrapped links are cold-email spam signals, so this is an opt-in
+    the sender flips per mailbox once its tracking domain (APP_BASE_URL) is set."""
+    db = SessionLocal()
+    try:
+        mb = db.query(Mailbox).get(mailbox_id)
+        if mb:
+            mb.tracking_on = not getattr(mb, "tracking_on", False)
+            log(db, "mailbox",
+                f"Tracking {'on' if mb.tracking_on else 'off'} for {mb.email}")
+            db.commit()
+        return RedirectResponse("/mailboxes", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/test/send")
+def send_test_email(request: Request, to_email: str = Form(...),
+                    to_name: str = Form(""), mailbox_id: str = Form(""),
+                    subject: str = Form("Quick test from Efforti"),
+                    body: str = Form("")):
+    """Send a one-off email to ANY address you type, THROUGH the engine — so it
+    carries the open pixel + wrapped links (when the mailbox has tracking on) and
+    lands on Analytics like a normal send. This is the way to verify open/click
+    tracking end-to-end: send to another inbox you control, open it, click the
+    link, and watch that person flip to Opened/Clicked. The recipient is stored as
+    a lead marked source='manual' so you can spot/remove test contacts later.
+
+    Repeat-safe: because the send-claim is a unique index on (lead_email, step),
+    a re-test to the same address uses the next free step index instead of
+    colliding — so you can retest the same inbox as many times as you like."""
+    to_email = (to_email or "").strip().lower()
+    who = f"&who={to_email}"
+    dom = to_email.split("@")[-1] if "@" in to_email else ""
+    if "@" not in to_email or "." not in dom:
+        return RedirectResponse(f"/mailboxes?mb=testbad{who}", status_code=303)
+    db = SessionLocal()
+    try:
+        if db.query(Suppression).filter(Suppression.email == to_email).first():
+            return RedirectResponse(f"/mailboxes?mb=testsupp{who}", status_code=303)
+        mb = _chosen_mailbox(db, mailbox_id) or _pick_mailbox(request, db)
+        if not mb:
+            return RedirectResponse(f"/mailboxes?mb=testnomb{who}", status_code=303)
+        lead = db.query(Lead).filter(Lead.email == to_email).first()
+        if not lead:
+            lead = Lead(email=to_email, first_name=to_name.strip(),
+                        source="manual", status="verified")
+            db.add(lead)
+            db.flush()
+        elif to_name.strip() and not lead.first_name:
+            lead.first_name = to_name.strip()
+        enr = _ensure_enrollment(db, lead, mb)
+        if not enr:
+            return RedirectResponse(f"/mailboxes?mb=testnoseq{who}", status_code=303)
+        # Next free step index for this recipient, so a re-test never collides
+        # with the (lead_email, step) unique send-claim index.
+        used = {s for (s,) in db.query(Message.step_index).filter(
+            Message.lead_email == to_email,
+            Message.status.in_(["sent", "sending"])).all()}
+        step = 0
+        while step in used:
+            step += 1
+        default_body = ("Hi {{ first_name }},\n\nThis is a test to check open & "
+                        "click tracking. Clicking this link should register a "
+                        "click: https://efforti.ai\n\nThanks!")
+        ok = send_email(db, mb, lead, enr, subject, (body.strip() or default_body),
+                        step)
+        if ok and lead.status in ("new", "verified", "enrolled"):
+            lead.status = "contacted"
+        db.commit()
+        return RedirectResponse(
+            f"/mailboxes?mb={'testok' if ok else 'testfail'}{who}",
+            status_code=303)
+    finally:
+        db.close()
+
+
 # Logos are embedded inline in every email, so keep them small.
 MAX_LOGO_BYTES = 300_000
 _LOGO_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/gif"}
@@ -1407,6 +1487,60 @@ def unsubscribe(token: str):
             "<p>You won't hear from us again.</p></body></html>")
     finally:
         db.close()
+
+
+# ---------------- Open / click tracking ----------------
+# A 1x1 transparent GIF, served for every open-pixel request.
+_PIXEL_GIF = base64.b64decode(
+    "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+_NO_CACHE = {"Cache-Control": "no-store, no-cache, must-revalidate, private",
+             "Pragma": "no-cache", "Expires": "0"}
+
+
+@app.get("/t/o/{token}.gif")
+def track_open(token: str):
+    """Open-pixel endpoint. The recipient's email client loads this image, which
+    records an open on the matching message. Opens are DIRECTIONAL only — Apple
+    Mail Privacy Protection and Gmail's image proxy pre-fetch images, so treat
+    this as a soft signal and weight clicks/replies far more heavily."""
+    db = SessionLocal()
+    try:
+        m = db.query(Message).filter(Message.track_token == token).first()
+        if m:
+            m.open_count = (m.open_count or 0) + 1
+            if not m.opened_at:
+                m.opened_at = utcnow()
+                log(db, "open", f"{m.lead_email} opened step {m.step_index + 1}")
+            db.commit()
+    finally:
+        db.close()
+    return Response(content=_PIXEL_GIF, media_type="image/gif", headers=_NO_CACHE)
+
+
+@app.get("/t/c/{token}")
+def track_click(token: str, u: str = ""):
+    """Click-redirect endpoint. Records a click on the matching message, then
+    302s to the real destination. A click also back-fills an open (the pixel is
+    often blocked even when the link is followed). Only http/https targets are
+    honored — anything else falls back to the app, so the wrapper can't be abused
+    as an open redirect to arbitrary schemes."""
+    dest = u if u[:7].lower() == "http://" or u[:8].lower() == "https://" \
+        else APP_BASE_URL
+    db = SessionLocal()
+    try:
+        m = db.query(Message).filter(Message.track_token == token).first()
+        if m:
+            m.click_count = (m.click_count or 0) + 1
+            if not m.clicked_at:
+                m.clicked_at = utcnow()
+                log(db, "click", f"{m.lead_email} clicked step {m.step_index + 1}")
+            if not m.opened_at:                 # a click implies it was opened
+                m.opened_at = utcnow()
+                m.open_count = (m.open_count or 0) + 1
+            db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(dest, status_code=302)
 
 
 # ---------------- Manual triggers ----------------

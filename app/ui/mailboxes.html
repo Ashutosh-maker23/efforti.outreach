@@ -59,6 +59,36 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     <span><strong style="color:var(--bad)">That logo isn't a supported image.</strong> Use a PNG, JPG or GIF. Your other signature fields were not saved; re-save with a valid image.</span>
   </div>
+  {% elif f.code == 'testok' %}
+  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong style="color:var(--ok)">Test email sent to {{f.email}}.</strong> Open it in that inbox and click the link, then check <a href="/analytics">Analytics</a> — that contact should flip to Opened/Clicked. If nothing registers, make sure the mailbox's tracking is <strong>on</strong> (below) and you sent it <em>after</em> turning it on.</span>
+  </div>
+  {% elif f.code == 'testfail' %}
+  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong style="color:var(--bad)">Couldn't send the test to {{f.email}}.</strong> The send failed at SMTP — check the mailbox's app password (Update password below) and that your network allows outbound port 587. The exact error is on the <a href="/activity">Activity</a> page.</span>
+  </div>
+  {% elif f.code == 'testnomb' %}
+  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong style="color:var(--bad)">No active mailbox to send from.</strong> Add a mailbox (or resume a paused one) first, then send the test.</span>
+  </div>
+  {% elif f.code == 'testsupp' %}
+  <div class="note-box" style="background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 30%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>{{f.email}} is on your suppression list</strong> (unsubscribed or bounced), so nothing was sent. Pick a different test address.</span>
+  </div>
+  {% elif f.code == 'testbad' %}
+  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong style="color:var(--bad)">That doesn't look like a valid email address.</strong> Nothing was sent.</span>
+  </div>
+  {% elif f.code == 'testnoseq' %}
+  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong style="color:var(--bad)">No active sequence to attach the test to.</strong> Nothing was sent — create/activate a sequence, then retry.</span>
+  </div>
   {% endif %}
 {% endif %}
 
@@ -92,10 +122,42 @@
   </div>
 </div>
 
+<div class="grid">
+  <div class="card" style="max-width:540px">
+    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Send a test email</h2>
+    <p class="sub">Send a real email <strong>through the engine</strong> to any address — this is how you verify open &amp; click tracking. Send it to another inbox you control, open it, click the link, then watch <a href="/analytics">Analytics</a> flip that contact to Opened/Clicked.</p>
+    <form method="post" action="/test/send">
+      <label>Send from</label>
+      <select name="mailbox_id">
+        {% for m in mailboxes %}{% if m.active %}
+        <option value="{{m.id}}">{{m.email}}{% if not m.tracking_on %} — tracking OFF{% endif %}</option>
+        {% endif %}{% endfor %}
+      </select>
+      <label>To (email)</label>
+      <input type="email" name="to_email" placeholder="you+test@gmail.com" required>
+      <label>To name <span class="muted">— optional, used in {{ '{{first_name}}' }}</span></label>
+      <input type="text" name="to_name" placeholder="Test Recipient">
+      <label>Subject</label>
+      <input type="text" name="subject" value="Quick test from Efforti">
+      <label>Body <span class="muted">— leave blank for a default message with a clickable link</span></label>
+      <textarea name="body" rows="4" placeholder="Leave blank to use a default test message that already contains a link to click."></textarea>
+      <div class="note-box" style="margin:16px 0 4px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span>Opens/clicks only record when the chosen mailbox has <strong>tracking on</strong> (toggle below) and <code>APP_BASE_URL</code> points at your public tunnel URL. The recipient is saved as a lead tagged <code>manual</code>.</span>
+      </div>
+      <div style="margin-top:16px"><button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Send test email</button></div>
+    </form>
+  </div>
+</div>
+
 <h2>Configured mailboxes</h2>
 <div class="note-box" style="margin:0 0 16px">
   <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
   <span><strong>No sending limit — send as many as you like.</strong> Nothing is capped or enforced. For deliverability (staying out of spam), the recommended warm-up on a fresh mailbox is roughly <strong>8 emails on day one, then +2 per day</strong> — that's guidance only, never a block. <strong>Sent today</strong> below is counted live from your actual sends.</span>
+</div>
+<div class="note-box" style="margin:0 0 16px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><path d="M3 3v18h18"/><path d="m7 14 3-3 4 4 5-6"/></svg>
+  <span><strong>Open &amp; click tracking is off by default.</strong> Turn it on per mailbox (button on the right of each row) to see opens and CTR on Analytics — it adds a 1×1 pixel and wraps links in outgoing HTML. Two cautions: pixels/link-wrapping are cold-email spam signals, so serve tracking links from a <strong>subdomain of your sending domain</strong> (set <code>APP_BASE_URL</code>, e.g. <code>https://track.yourdomain.com</code>), never a raw tunnel/onrender URL for real sending; and <strong>opens are directional</strong> (Apple Mail &amp; Gmail pre-load images) — trust clicks and replies.</span>
 </div>
 <div class="tbl"><table>
   <thead><tr><th>Email</th><th>Status</th><th>Sent today</th><th>7-day bounce</th><th></th></tr></thead>
@@ -104,7 +166,8 @@
   <tr>
     <td>{{m.email}}{% if m.display_name %}<div class="sub-line">{{m.display_name}}</div>{% endif %}{% if m.auth_email %}<div class="sub-line">signs in as {{m.auth_email}}</div>{% endif %}</td>
     <td>{% if m.active %}<span class="tag active">active</span>
-        {% else %}<span class="tag paused">paused</span>{% if m.paused_reason %}<div class="sub-line">{{m.paused_reason}}</div>{% endif %}{% endif %}</td>
+        {% else %}<span class="tag paused">paused</span>{% if m.paused_reason %}<div class="sub-line">{{m.paused_reason}}</div>{% endif %}{% endif %}
+        <div class="sub-line">{% if m.tracking_on %}📊 open/click tracking on{% else %}tracking off{% endif %}</div></td>
     <td class="mono">{{ sent_today_map.get(m.email, 0) }}</td>
     <td class="mono" style="{{'color:var(--bad);font-weight:600' if m.bounce_rate() > 0.03}}">{{'%.1f'|format(m.bounce_rate()*100)}}%</td>
     <td style="text-align:right">
@@ -119,6 +182,10 @@
         </form>
         <form class="inline" method="post" action="/mailboxes/{{m.id}}/toggle">
           <button class="btn ghost sm">{{'Pause' if m.active else 'Resume'}}</button>
+        </form>
+        <form class="inline" method="post" action="/mailboxes/{{m.id}}/tracking"
+              title="Add a 1x1 open pixel and wrap links so opens/clicks (CTR) show on Analytics. Off by default — only turn on once your tracking domain is set (see APP_BASE_URL).">
+          <button class="btn ghost sm">{{'Turn tracking off' if m.tracking_on else 'Turn tracking on'}}</button>
         </form>
       </div>
     </td>

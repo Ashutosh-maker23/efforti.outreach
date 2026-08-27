@@ -49,6 +49,11 @@ class Mailbox(Base):
     sig_email = Column(String, default="")         # "Email Id" shown; blank = mailbox email
     logo_b64 = Column(Text, default="")            # inline logo, base64
     logo_mime = Column(String, default="")         # e.g. "image/png"
+    # Open/click tracking for emails sent FROM this mailbox. Off by default —
+    # tracking pixels and link-wrapping are cold-email spam signals, so it's an
+    # opt-in per mailbox. When on, sends carry a 1x1 pixel + wrapped links (see
+    # emailer.build_email); when off, emails go out untouched.
+    tracking_on = Column(Boolean, default=False)
 
     def login_email(self) -> str:
         """Address used to authenticate to SMTP/IMAP — the alias's real account
@@ -174,6 +179,18 @@ class Message(Base):
     # duplicate-> a second copy that predates the unique claim (kept for history,
     #             never counted as sent)
     status = Column(String, default="sent")
+    # First-party engagement tracking. `track_token` is the per-message secret in
+    # the open-pixel and click-redirect URLs; opens/clicks are counted when the
+    # recipient's client loads the pixel or follows a wrapped link. NOTE: opens are
+    # directional only — Apple Mail Privacy Protection and image proxies pre-fetch
+    # the pixel, so trust clicks and replies more. Only used when the sending
+    # mailbox has tracking_on (see Mailbox.tracking_on).
+    track_token = Column(String, index=True,
+                         default=lambda: secrets.token_urlsafe(16))
+    opened_at = Column(DateTime)                    # first open (NULL = never)
+    open_count = Column(Integer, default=0)         # total pixel loads
+    clicked_at = Column(DateTime)                   # first click (NULL = never)
+    click_count = Column(Integer, default=0)        # total tracked-link follows
 
 
 class Suppression(Base):
@@ -262,6 +279,14 @@ def _migrate_sqlite():
             "sig_email": "VARCHAR DEFAULT ''",
             "logo_b64": "TEXT DEFAULT ''",
             "logo_mime": "VARCHAR DEFAULT ''",
+            "tracking_on": "BOOLEAN DEFAULT 0",
+        },
+        "messages": {
+            "track_token": "VARCHAR",
+            "opened_at": "DATETIME",
+            "open_count": "INTEGER DEFAULT 0",
+            "clicked_at": "DATETIME",
+            "click_count": "INTEGER DEFAULT 0",
         },
         "leads": {
             "company_research": "TEXT DEFAULT ''",

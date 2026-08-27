@@ -7,7 +7,7 @@
     <h1>Analytics</h1>
     {% if active_mb %}<span class="scope-pill">Sending as {{active_mb.email}}</span>{% endif %}
   </div>
-  <p class="sub">Real, first-party performance — sends, follow-ups, replies and response time, computed live from your records. Reply rate is the metric that matters; opens/CTR aren't tracked (unreliable and bad for deliverability).</p>
+  <p class="sub">Real, first-party performance — sends, follow-ups, replies, opens and clicks, computed live from your records. Reply rate is still the metric that matters most; opens are directional (mail apps pre-load pixels), so weight clicks and replies more.</p>
 </div>
 
 <!-- Headline metrics -->
@@ -26,6 +26,16 @@
     <div class="tl">Reply rate</div>
     <div class="num">{{a.reply_rate}}%</div>
     <div class="note">{{a.replied}} replies received</div>
+  </div>
+  <div class="tile">
+    <div class="tl">Open rate</div>
+    <div class="num">{% if a.tracked_people %}{{a.open_rate}}%{% else %}—{% endif %}</div>
+    <div class="note">{% if a.tracked_people %}{{a.openers}} of {{a.tracked_people}} tracked opened{% else %}tracking off{% endif %}</div>
+  </div>
+  <div class="tile accent">
+    <div class="tl">Click rate (CTR)</div>
+    <div class="num">{% if a.tracked_people %}{{a.ctr}}%{% else %}—{% endif %}</div>
+    <div class="note">{% if a.tracked_people %}{{a.clickers}} clicked · {{a.click_to_open}}% of openers{% else %}enable per mailbox{% endif %}</div>
   </div>
   <div class="tile">
     <div class="tl">Avg response</div>
@@ -78,7 +88,7 @@
 <!-- Per-person engagement -->
 <h2>People <span class="hint">every contact and how they're engaging</span></h2>
 <div class="tbl"><table>
-  <thead><tr><th>Name</th><th>Brand</th><th>Position</th><th>Status</th><th>Mails</th><th>Follow-ups</th><th>Contacted</th><th>Response time</th></tr></thead>
+  <thead><tr><th>Name</th><th>Brand</th><th>Position</th><th>Status</th><th>Mails</th><th>Follow-ups</th><th>Opened</th><th>Clicked</th><th>Contacted</th><th>Response time</th></tr></thead>
   <tbody>
   {% for r in a.rows %}
   <tr>
@@ -88,11 +98,13 @@
     <td><span class="tag {{r.status}}">{{r.status}}</span></td>
     <td class="mono">{{r.mails}}</td>
     <td class="mono">{{r.followups}}</td>
+    <td class="mono" style="{{'color:var(--ok);font-weight:600' if r.opened}}">{{'✓' if r.opened else '—'}}</td>
+    <td class="mono" style="{{'color:var(--accent);font-weight:700' if r.clicked}}">{{'✓' if r.clicked else '—'}}</td>
     <td class="muted mono">{{ r.contacted_at.strftime('%d %b') if r.contacted_at else '—' }}</td>
     <td class="mono" style="{{'color:var(--ok);font-weight:600' if r.response}}">{{r.response or '—'}}</td>
   </tr>
   {% else %}
-  <tr><td colspan="8"><div class="empty">
+  <tr><td colspan="10"><div class="empty">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
     <p>No people yet — pull leads to populate this.</p></div></td></tr>
   {% endfor %}
@@ -101,6 +113,6 @@
 
 <div class="note-box" style="margin-top:22px">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-  <span><strong>About the data.</strong> Replies are detected by polling your own mailboxes over IMAP — that's why reply/response numbers are real and first-party. Apollo can't report on emails you send through Gmail, so there's no Apollo-side CTR; open tracking is intentionally off. Bounce and unsubscribe are captured automatically at send and poll time.</span>
+  <span><strong>About the data.</strong> Everything here is first-party. Replies come from polling your own mailboxes over IMAP; opens and clicks come from a 1×1 pixel and wrapped links on emails sent from tracking-enabled mailboxes (turn tracking on per mailbox on the Mailboxes page). <strong>Opens are directional</strong> — Apple Mail Privacy Protection and Gmail's image proxy pre-load the pixel, inflating opens and even back-filling one on a click — so weight clicks and replies more heavily. Bounce and unsubscribe are captured automatically at send and poll time.</span>
 </div>
 {% endblock %}
