@@ -38,7 +38,8 @@ import time
 
 import requests
 
-from .icp import (build_niche, location_match, niche_prescreen,
+from .icp import (NON_ROLE_START_RE, STALE_TITLE_RE, build_niche,
+                  location_match, niche_prescreen,
                   parse_band, prescreen_org,
                   score_lead, title_tier)
 from .importer import normalize_domain, verify_email
@@ -896,7 +897,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
              "skipped_brand_full": 0, "skipped_scope": 0,
              "skipped_invalid": 0, "skipped_icp": 0, "skipped_prescreen": 0,
              "skipped_location": 0, "skipped_location_prereveal": 0,
-             "skipped_niche_prereveal": 0,
+             "skipped_niche_prereveal": 0, "skipped_title_prereveal": 0,
              "skipped_brand_full_prereveal": 0, "skipped_scope_prereveal": 0,
              "skipped_known": 0, "skipped_identity": 0,
              "icp_reject_reasons": {}, "exhausted": False,
@@ -1065,6 +1066,19 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                 if not niche_prescreen(pre_org, target_hints):
                     stats["skipped_niche_prereveal"] += 1
                     continue
+                # FREE title gate: a stale/former/advisory title (former, ex,
+                # retired, fractional, advisor, board, mentor…) is a GUARANTEED
+                # post-reveal reject — score_lead HARD-rejects it regardless of
+                # company fit (icp.py, STALE_TITLE_RE/NON_ROLE_START_RE). Title is
+                # one of the few fields reliably present pre-reveal, so skip it now
+                # and never spend a credit revealing it. We skip ONLY these certain
+                # rejects: junior/IC titles are deliberately NOT skipped, because an
+                # IC at a target-industry, in-band, engineering-led company can
+                # still clear the ICP bar (base 50 +18 +8 +10 −16 = 70 > 55).
+                _pt = p.get("title") or ""
+                if STALE_TITLE_RE.search(_pt) or NON_ROLE_START_RE.search(_pt):
+                    stats["skipped_title_prereveal"] += 1
+                    continue
                 candidates.append((pid, title_tier(p.get("title") or "")[0],
                                    _norm_company(pre_org.get("name"))))
             # Reveal higher-tier titles first, so a brand's slots fill with the
@@ -1149,7 +1163,10 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         f"skipped free ({stats['skipped_identity']} by name+company) · "
         f"{stats['skipped_brand_full_prereveal'] + stats['skipped_scope_prereveal']} "
         f"dup-brand skipped BEFORE reveal (credits saved) · "
-        f"{stats['fetched']} scanned · "
+        + (f"{stats['skipped_title_prereveal']} stale/non-role titles skipped "
+           f"BEFORE reveal (credits saved) · "
+           if stats['skipped_title_prereveal'] else "")
+        + f"{stats['fetched']} scanned · "
         f"{off_icp} off-niche discarded ({stats['skipped_prescreen'] + stats['skipped_niche_prereveal']} pre-reveal"
         + (f"; top: {top_reasons}" if top_reasons else "") + ") · "
         + (f"{off_loc} wrong-location · " if off_loc else "")

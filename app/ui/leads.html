@@ -95,7 +95,7 @@
     <strong>Where your {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} went</strong> (1 credit = 1 reveal):
     <strong style="color:var(--ok)">{{pull_result.imported}}</strong> became sendable leads ·
     <strong>{{pull_result.discarded}}</strong> discarded (off-niche, below-bar, wrong HQ, or already yours — nothing is kept aside).
-    {% if pull_result.saved_pre %}<br><strong style="color:var(--ok)">✓ {{pull_result.saved_pre}} duplicate-brand contact{{'' if pull_result.saved_pre==1 else 's'}} skipped BEFORE revealing — those credits were saved</strong> (we cap execs-per-brand before paying).{% endif %}
+    {% if pull_result.saved_pre %}<br><strong style="color:var(--ok)">✓ {{pull_result.saved_pre}} over-cap or stale-title contact{{'' if pull_result.saved_pre==1 else 's'}} skipped BEFORE revealing — those credits were saved</strong> (we cap execs-per-brand and drop former/advisory titles before paying).{% endif %}
     {% if pull_result.known %}<br>{{pull_result.known}} already-owned skipped free (0 credits — no re-reveal).{% endif %}
     <br>Asked for {{pull_result.target_total}} lead{{'' if pull_result.target_total==1 else 's'}}{% if pull_result.mode == 'companies' %} ({{ (pull_result.target_total / pull_result.per_brand) | round(0, 'ceil') | int }} brands × {{pull_result.per_brand}} roles){% else %} (max {{pull_result.per_brand}} per company){% endif %} · scanned {{pull_result.fetched}} contacts over {{pull_result.pages}} page{{'' if pull_result.pages==1 else 's'}}.
     {% if pull_result.imported < pull_result.target_total %}
@@ -106,7 +106,7 @@
     {% elif stop == 'reveal budget' %}The reveal budget ({{pull_result.reveals}} credits) ran out before the target — <strong>re-run to continue</strong> from where it stopped.
     {% elif stop == 'scan budget' %}The scan budget ran out before the target — <strong>re-run to continue</strong>.
     {% else %}Re-run to continue, or broaden the filters.{% endif %}
-    <br><span style="opacity:.85">Free funnel: {{pull_result.fetched}} scanned → {{pull_result.known}} already yours → {% if pull_result.niche_pre %}{{pull_result.niche_pre}} off-niche{% endif %}{% if pull_result.loc_pre %}{% if pull_result.niche_pre %} · {% endif %}{{pull_result.loc_pre}} wrong HQ{% endif %}{% if pull_result.saved_pre %}{% if pull_result.niche_pre or pull_result.loc_pre %} · {% endif %}{{pull_result.saved_pre}} brand already full{% endif %} dropped before paying → <strong>{{pull_result.reveals}} revealed</strong> → {{pull_result.imported}} kept.</span>
+    <br><span style="opacity:.85">Free funnel: {{pull_result.fetched}} scanned → {{pull_result.known}} already yours → {% if pull_result.niche_pre %}{{pull_result.niche_pre}} off-niche{% endif %}{% if pull_result.loc_pre %}{% if pull_result.niche_pre %} · {% endif %}{{pull_result.loc_pre}} wrong HQ{% endif %}{% if pull_result.saved_pre %}{% if pull_result.niche_pre or pull_result.loc_pre %} · {% endif %}{{pull_result.saved_pre}} brand-full / stale-title{% endif %} dropped before paying → <strong>{{pull_result.reveals}} revealed</strong> → {{pull_result.imported}} kept.</span>
     {% endif %}
   </span>
   {% if not ok %}<br><strong>No fit this run.</strong> Broaden <em>Roles</em>, <em>Industry focus</em>, <em>Company HQ</em> or <em>Company size</em> to reach fresh brands.{% endif %}</span>

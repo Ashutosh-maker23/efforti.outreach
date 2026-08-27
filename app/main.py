@@ -942,7 +942,7 @@ def apollo_pull(count: int = Form(0), mode: str = Form("companies"),
             f"&icp={s['skipped_icp'] + s['skipped_prescreen']}"
             f"&loc={loc_skips}&reveals={s['reveals']}"
             f"&known={s['skipped_known'] + s['skipped_identity']}"
-            f"&savedpre={s['skipped_brand_full_prereveal'] + s['skipped_scope_prereveal']}"
+            f"&savedpre={s['skipped_brand_full_prereveal'] + s['skipped_scope_prereveal'] + s['skipped_title_prereveal']}"
             f"&nichepre={s['skipped_niche_prereveal'] + s['skipped_prescreen']}"
             f"&locpre={s['skipped_location_prereveal']}"
             f"&pages={s['pages']}&stop={s['stop_reason']}"
