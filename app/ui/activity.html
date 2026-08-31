@@ -12,11 +12,11 @@
     </form>
     {% endif %}
   </div>
-  <p class="sub">Every send, reply, bounce, unsubscribe and pause — a live audit trail of ongoing activity.</p>
+  <p class="sub">Every send, open, click, reply, bounce, unsubscribe and pause — a live audit trail of ongoing activity.</p>
 </div>
 <div class="chips">
   <a href="/activity" class="{{'on' if not kind_filter}}">all</a>
-  {% for k in ['send','reply','bounce','unsub','pause','enroll','import','enrich','error'] %}
+  {% for k in ['send','open','click','reply','bounce','unsub','pause','enroll','import','enrich','error'] %}
   <a href="/activity?kind={{k}}" class="{{'on' if kind_filter==k}}">{{k}}</a>
   {% endfor %}
 </div>
