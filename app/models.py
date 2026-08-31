@@ -191,6 +191,51 @@ class Message(Base):
     open_count = Column(Integer, default=0)         # total pixel loads
     clicked_at = Column(DateTime)                   # first click (NULL = never)
     click_count = Column(Integer, default=0)        # total tracked-link follows
+    # Machine fetches that were REFUSED as opens/clicks: Gmail's image proxy,
+    # Apple MPP, and link scanners all pull the pixel at DELIVERY time, seconds
+    # after the send, before any human has seen anything. Counting those made
+    # every Gmail recipient look like an opener. app/tracking.py decides; the
+    # rejects land here instead of in opened_at, and `open_agent` keeps the
+    # user-agent of the last fetch so you can SEE what hit the pixel.
+    prefetch_count = Column(Integer, default=0)
+    open_agent = Column(String, default="")
+
+
+class TrackHit(Base):
+    """One raw fetch of a tracking pixel or a wrapped link. NOTHING is judged
+    away here — every single request is written down exactly as it arrived.
+
+    This exists because the summary fields on Message (opened_at, open_count)
+    can only ever hold a CONCLUSION, and a conclusion you cannot audit is worth
+    nothing. When the app says someone opened your email, this table is where
+    you check whether that is true: who fetched it, with what user-agent, from
+    what address, and how long after the send.
+
+    It is also what makes tracking testable. Re-open the same mail ten times and
+    ten rows appear, each with its own timestamp — instead of a single flag set
+    once and never spoken of again.
+    """
+    __tablename__ = "track_hits"
+    id = Column(Integer, primary_key=True)
+    message_id = Column(Integer, ForeignKey("messages.id"), index=True)
+    lead_email = Column(String, index=True)
+    step_index = Column(Integer)
+    kind = Column(String, index=True)          # "open" (pixel) | "click" (link)
+    user_agent = Column(Text, default="")      # verbatim, as sent
+    remote_ip = Column(String, default="")
+    # Seconds between the send and this fetch. Recorded as an OBSERVATION, not a
+    # verdict — see app/tracking.py for how (and whether) it is used to decide.
+    delay_seconds = Column(Float)
+    # What the user-agent says this requester is: "client" (a mail app or
+    # browser), "proxy" (the recipient's provider fetching on their behalf, e.g.
+    # Gmail), or "machine" (a scanner, crawler or script that is never a reader).
+    source = Column(String, index=True, default="")
+    # Whether this hit was counted toward opened_at / clicked_at, and the plain
+    # reason. Both the yes and the no are kept, so a disputed number can always
+    # be traced back to the request that produced it.
+    counted = Column(Boolean, default=False)
+    reason = Column(String, default="")
+    created_at = Column(DateTime, default=utcnow, index=True)
 
 
 class Suppression(Base):
@@ -287,6 +332,8 @@ def _migrate_sqlite():
             "open_count": "INTEGER DEFAULT 0",
             "clicked_at": "DATETIME",
             "click_count": "INTEGER DEFAULT 0",
+            "prefetch_count": "INTEGER DEFAULT 0",
+            "open_agent": "VARCHAR DEFAULT ''",
         },
         "leads": {
             "company_research": "TEXT DEFAULT ''",

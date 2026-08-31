@@ -23,7 +23,7 @@ from .models import Enrollment, Sequence, SequenceStep, log
 
 # Bump this name whenever the canonical copy changes so a fresh version seeds
 # cleanly and becomes the single active default (older ones are retired below).
-SEQUENCE_NAME = "Efforti field-report cold sequence v11"
+SEQUENCE_NAME = "Efforti field-report cold sequence v12"
 
 # ── Email 1 · Day 0 · opens the thread ──────────────────────────────────────
 # This step-0 subject/body is only a NEUTRAL FALLBACK. Normally the operator
@@ -42,40 +42,69 @@ Taking 5 founding pilots this month: 30 days, one region or cluster, we handle t
 P.S. Prefer to poke at it yourself first? agents.efforti.com. First team live in ~15 minutes, no integrations."""
 
 # ── Email 2 · Working day 3 · reply in email 1's thread (blank subject) ─────
-# Follow-ups are niche-NEUTRAL (they work after any O&M or EPC first touch) and
-# intentionally short. Edit freely in the Sequences UI.
+# Follow-ups are niche-NEUTRAL by design: they lean on the spine EVERY one of the
+# 8 first-touch variants shares (no app, 9am compiled report, silent sites chased,
+# a report you can question), so a single set reads on-message after any O&M or EPC
+# opener. Each touch ADVANCES the pitch instead of repeating it, carries a light
+# agents.efforti.com self-serve hook, and follows the house style (one sentence per
+# line, blank lines between blocks, no em-dashes). Edit freely in the Sequences UI.
 STEP_1_BODY = """Hi {{first_name}},
 
-Following up on this. The whole idea is that your field teams don't have to learn anything. Each site just replies to one message the way they already text you, and by 9am you have every site's update in one report you can question line by line. Silent sites get chased for you.
+Following up on my last email. The best part is how little has to change on your side.
 
-Worth 20 minutes to see it on your sites?"""
+There is no app for your field team and no dashboard for them to log into.
+Each site in-charge just replies to one simple message, close to the way they already text you.
+By 9am you have every site in one compiled report, and any site that goes quiet gets chased for you.
+
+The field side stays light, so there is very little for anyone to pick up.
+
+Worth 20 minutes to see it running on your own sites?
+
+P.S. You can also just try it: agents.efforti.com, your first site live in about 15 minutes."""
 
 # ── Email 3 · Working day 7 · reply in the opener's thread (blank subject) ──
 STEP_2_SUBJECT = ""
 STEP_2_BODY = """Hi {{first_name}},
 
-Most site-reporting tools die because the field team won't use them. Efforti has nothing for them to install; they just reply to a message. You still get every site by 9am, and the report tells you not just what's behind but why, in the site team's own words.
+Most site-reporting tools fail for one reason: the field team quietly stops using them.
 
-Happy to walk you through it in 20 minutes this week or next."""
+Efforti keeps the field side about as light as it gets.
+They just reply to a message, so there is far less to adopt and far less to drop.
+You still get every site by 9am, and the report tells you not just what is behind but why, in the team's own words.
+
+So when a site slips, you can ask it straight, "why is this one behind this week," and get a real answer, not a red status box.
+
+Happy to walk you through it this week or next.
+
+P.S. Prefer to see it first? agents.efforti.com, no integrations."""
 
 # ── Email 4 · Working day 12 · reply in email 3's thread (blank subject) ────
 STEP_3_BODY = """Hi {{first_name}},
 
-One more angle: the report is something you can argue with. Drill into any line ("why is that site behind this week?") and you get the answer from the people actually on the ground, not a status colour.
+Let me be honest about why I keep writing.
 
-We run 5 founding pilots a month: 30 days, one region or cluster, we do the chasing. Want one of the slots?"""
+I built Efforti after watching sharp operators lose their evenings to "figure batao" calls and their mornings to reports they could not question.
+That is a problem worth solving properly, so we take only a handful of teams at a time and give each one real attention.
+
+We are running 5 founding pilots this month: 30 days, one region or cluster, and we do the chasing for you.
+If it does not save your team real time, you walk, no obligation.
+
+Can I hold one of the slots for your team?
+
+P.S. agents.efforti.com if you would rather see it work before we talk."""
 
 # ── Email 5 · Working day 16 · reply in the opener's thread (blank subject) ──
 STEP_4_SUBJECT = ""
 STEP_4_BODY = """Hi {{first_name}},
 
-I'll close the loop here.
+I will close the loop here so I am not crowding your inbox.
 
-You can try it yourself at agents.efforti.com. A check-in for your first team is live in ~15 minutes, no integrations.
+If it is simply not now, reply with a month ("Nov" is enough) and I will come back exactly then, not before.
 
-Or if it's simply "not now," reply with a month ("Nov" is enough) and I'll come back exactly then. Not before.
+And if you are curious but not ready to talk, try it yourself at agents.efforti.com.
+A check-in for your first team is live in about 15 minutes, with no integrations.
 
-Thanks for reading, and good luck with the quarter."""
+Either way, thank you for reading, and good luck with the quarter."""
 
 
 def _steps_for(seq_id):

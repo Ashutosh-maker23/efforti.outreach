@@ -1,36 +1,58 @@
 {% extends "base.html" %}
 {% set active_nav = 'act' %}
 {% block title %}Activity{% endblock %}
+
+{% block head_extra %}
+<style>
+  .act-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;
+    flex-wrap:wrap;margin-bottom:22px}
+  .act-head .txt{flex:1 1 420px;min-width:0}
+  .filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+  .filter-bar .cap{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--text-4)}
+  .filter-bar .chips{margin:0}
+  .log td:first-child{width:170px;white-space:nowrap}
+  .log td:nth-child(2){width:106px}
+  .log td:last-child{line-height:1.5;word-break:break-word}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="page-head">
-  <div class="row">
+<div class="act-head">
+  <div class="txt">
     <h1>Activity</h1>
-    {% if events %}
-    <form method="post" action="/activity/clear" style="margin-left:auto"
-          onsubmit="return confirm('Clear the activity log? This removes log entries only — your leads, mailboxes and sends are untouched.')">
-      <button class="btn ghost sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>Clear log</button>
-    </form>
-    {% endif %}
+    <p class="sub">Every send, open, click, reply, bounce, unsubscribe and pause — a live audit trail of ongoing activity.</p>
   </div>
-  <p class="sub">Every send, open, click, reply, bounce, unsubscribe and pause — a live audit trail of ongoing activity.</p>
+  {% if events %}
+  <form method="post" action="/activity/clear"
+        onsubmit="return confirm('Clear the activity log? This removes log entries only — your leads, mailboxes and sends are untouched.')">
+    <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>Clear log</button>
+  </form>
+  {% endif %}
 </div>
-<div class="chips">
-  <a href="/activity" class="{{'on' if not kind_filter}}">all</a>
-  {% for k in ['send','open','click','reply','bounce','unsub','pause','enroll','import','enrich','error'] %}
-  <a href="/activity?kind={{k}}" class="{{'on' if kind_filter==k}}">{{k}}</a>
-  {% endfor %}
+
+<div class="filter-bar">
+  <span class="cap">Filter</span>
+  <div class="chips">
+    <a href="/activity" class="{{'on' if not kind_filter}}">all</a>
+    {% for k in ['send','open','click','reply','bounce','unsub','pause','enroll','import','enrich','error'] %}
+    <a href="/activity?kind={{k}}" class="{{'on' if kind_filter==k}}">{{k}}</a>
+    {% endfor %}
+  </div>
 </div>
-<div class="tbl"><table><tbody>
+
+<div class="tbl tbl-scroll"><table class="log"><tbody>
   {% for e in events %}
   <tr>
-    <td class="muted mono" style="width:160px">{{e.created_at.strftime('%d %b · %H:%M:%S')}}</td>
-    <td style="width:96px"><span class="tag {{e.kind}}">{{e.kind}}</span></td>
+    <td class="muted mono">{{e.created_at.strftime('%d %b · %H:%M:%S')}}</td>
+    <td><span class="tag {{e.kind}}">{{e.kind}}</span></td>
     <td>{{e.detail}}</td>
   </tr>
   {% else %}
   <tr><td><div class="empty">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-    <p>No events yet.</p></div></td></tr>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    <p>{% if kind_filter %}No <strong>{{kind_filter}}</strong> events yet. <a href="/activity">Show everything</a>.{% else %}No events yet — the log fills up as the engine sources, sends and polls.{% endif %}</p>
+  </div></td></tr>
   {% endfor %}
 </tbody></table></div>
 {% endblock %}

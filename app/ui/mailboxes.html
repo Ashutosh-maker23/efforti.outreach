@@ -1,131 +1,149 @@
 {% extends "base.html" %}
 {% set active_nav = 'mail' %}
 {% block title %}Mailboxes{% endblock %}
+
+{% block head_extra %}
+<style>
+  .pw-wrap{position:relative}
+  .pw-wrap input{padding-right:42px}
+  .pw-eye{position:absolute;top:0;right:0;height:100%;width:40px;display:flex;align-items:center;
+    justify-content:center;background:none;border:none;cursor:pointer;color:var(--text-3);padding:0;
+    transition:color var(--t-fast)}
+  .pw-eye:hover{color:var(--text)}
+  .pw-eye svg{width:17px;height:17px;stroke-width:2}
+  .mb-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
+  .mb-tbl td:last-child{text-align:right}
+  /* Password editor tucked behind a disclosure so the row stays one clean line.
+     It expands inside the cell (not absolutely positioned) because .tbl clips
+     overflow — an absolute panel would be cut off by the table's rounded box. */
+  .pwdet > summary{list-style:none;display:inline-flex;cursor:pointer}
+  .pwdet > summary::-webkit-details-marker{display:none}
+  .pwdet[open]{flex-basis:100%}
+  .pwdet[open] > summary .btn{background:var(--surface-3);border-color:var(--border-3)}
+  .pwpop{width:290px;margin:10px 0 0 auto;padding:14px;text-align:left;
+    background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--r);
+    box-shadow:var(--sh-1);animation:flashIn .22s var(--ease-out) both}
+  .pwpop label{margin:13px 0 5px}
+  .pwpop form > label:first-child{margin-top:0}
+  .pwpop input{margin:0;font-size:12.5px}
+  .pwpop .go{margin-top:14px}
+  .track-line{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-3);
+    margin-top:4px}
+  .track-line svg{width:12px;height:12px;stroke-width:2.2}
+  .track-line.on{color:var(--accent-ink)}
+  /* Signature editor */
+  details.sig{max-width:900px;margin-bottom:12px;padding:0;overflow:hidden}
+  details.sig > summary{cursor:pointer;font-weight:620;font-size:13.5px;list-style:none;
+    padding:15px 20px;display:flex;align-items:center;gap:10px;
+    transition:background var(--t-fast)}
+  details.sig > summary::-webkit-details-marker{display:none}
+  details.sig > summary:hover{background:var(--surface-2)}
+  details.sig > summary::after{content:"";margin-left:auto;width:8px;height:8px;flex:none;
+    border-right:2px solid var(--text-3);border-bottom:2px solid var(--text-3);
+    transform:rotate(45deg) translate(-2px,-2px);transition:transform var(--t)}
+  details.sig[open] > summary{border-bottom:1px solid var(--border);background:var(--surface-2)}
+  details.sig[open] > summary::after{transform:rotate(225deg) translate(-2px,-2px)}
+  .sig-body{display:flex;gap:28px;flex-wrap:wrap;padding:20px}
+  .sig-body > *{flex:1 1 320px;min-width:280px}
+  .sig-preview{border:1px solid var(--border-2);border-radius:12px;padding:18px;
+    background:#ffffff;color:#000;max-width:100%;overflow-x:auto;box-shadow:var(--sh-1)}
+  .checkline{display:flex;align-items:center;gap:9px;font-weight:520;margin:0 0 4px}
+  .checkline input{width:auto;margin:0;flex:none}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-head">
   <h1>Mailboxes</h1>
-  <p class="sub">Sending accounts on lookalike domains (getefforti.com, tryefforti.com…). Never your primary domain. Each mailbox needs a Gmail <strong>app password</strong>: Google Account → Security → 2-Step Verification → App passwords.</p>
+  <p class="sub">Sending accounts on lookalike domains (getefforti.com, tryefforti.com…) — never your primary domain. Each mailbox needs a Gmail <strong>app password</strong>: Google Account → Security → 2-Step Verification → App passwords.</p>
 </div>
 
 {% if mb_feedback %}
   {% set f = mb_feedback %}
   {% if f.code == 'ok' %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">{{f.email}} added.</strong> We signed in to Gmail with these credentials and the login worked, so this mailbox is ready to send.</span>
-  </div>
+  <div class="note-box ok flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong>{{f.email}} added.</strong> We signed in to Gmail with these credentials and the login worked, so this mailbox is ready to send.</span></div>
   {% elif f.code == 'dup' %}
-  <div class="note-box" style="background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong>{{f.email}} is already configured.</strong> Nothing was changed — each mailbox can only be added once.</span>
-  </div>
+  <div class="note-box flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>{{f.email}} is already configured.</strong> Nothing was changed — each mailbox can only be added once.</span></div>
   {% elif f.code == 'auth' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">{{f.email}} was rejected — Gmail refused the login.</strong> Nothing was saved. Check that the email is correct and that you pasted a valid <strong>16-character app password</strong> (not your normal Gmail password). App passwords need 2-Step Verification turned on: Google Account → Security → App passwords.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>{{f.email}} was rejected — Gmail refused the login.</strong> Nothing was saved. Check that the email is correct and that you pasted a valid <strong>16-character app password</strong> (not your normal Gmail password). App passwords need 2-Step Verification turned on: Google Account → Security → App passwords.</span></div>
   {% elif f.code == 'conn' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Couldn't reach Gmail to verify {{f.email}}.</strong> Nothing was saved. This is usually a temporary network issue — please try again in a moment.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Couldn't reach Gmail to verify {{f.email}}.</strong> Nothing was saved. This is usually a temporary network issue — please try again in a moment.</span></div>
   {% elif f.code == 'pwok' %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">App password updated for {{f.email}}.</strong> We signed in to Gmail with the new password and it worked — this mailbox can send again.</span>
-  </div>
+  <div class="note-box ok flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong>App password updated for {{f.email}}.</strong> We signed in to Gmail with the new password and it worked — this mailbox can send again.</span></div>
   {% elif f.code == 'pwauth' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Gmail refused that password for {{f.email}}.</strong> The old one was kept. Paste the <strong>16-character app password</strong> (Google Account → Security → 2-Step Verification → App passwords), not your normal login password.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Gmail refused that password for {{f.email}}.</strong> The old one was kept. Paste the <strong>16-character app password</strong> (Google Account → Security → 2-Step Verification → App passwords), not your normal login password.</span></div>
   {% elif f.code == 'pwconn' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Couldn't reach Gmail to verify the new password for {{f.email}}.</strong> The old one was kept. If this app is hosted on a network that blocks outbound SMTP (e.g. Render's free tier), the check can't run there — try from a host that allows SMTP.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Couldn't reach Gmail to verify the new password for {{f.email}}.</strong> The old one was kept. If this app is hosted on a network that blocks outbound SMTP (e.g. Render's free tier), the check can't run there — try from a host that allows SMTP.</span></div>
   {% elif f.code == 'sigok' %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">Signature saved for {{f.email}}.</strong> Every email this mailbox sends now carries it — the preview below is exactly what recipients see.</span>
-  </div>
+  <div class="note-box ok flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong>Signature saved for {{f.email}}.</strong> Every email this mailbox sends now carries it — the preview below is exactly what recipients see.</span></div>
   {% elif f.code == 'logobig' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Logo too large for {{f.email}}.</strong> Keep it under 300&nbsp;KB — logos ride inside every email, so a small PNG works best. Your other signature fields were not saved; re-save with a smaller image.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Logo too large for {{f.email}}.</strong> Keep it under 300&nbsp;KB — logos ride inside every email, so a small PNG works best. Your other signature fields were not saved; re-save with a smaller image.</span></div>
   {% elif f.code == 'logotype' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">That logo isn't a supported image.</strong> Use a PNG, JPG or GIF. Your other signature fields were not saved; re-save with a valid image.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>That logo isn't a supported image.</strong> Use a PNG, JPG or GIF. Your other signature fields were not saved; re-save with a valid image.</span></div>
   {% elif f.code == 'testok' %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">Test email sent to {{f.email}}.</strong> Open it in that inbox and click the link, then check <a href="/analytics">Analytics</a> — that contact should flip to Opened/Clicked. If nothing registers, make sure the mailbox's tracking is <strong>on</strong> (below) and you sent it <em>after</em> turning it on.</span>
-  </div>
+  <div class="note-box ok flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong>Test email sent to {{f.email}}.</strong> Open it in that inbox and click the link, then check <a href="/analytics">Analytics</a> — that contact should flip to Opened/Clicked. If nothing registers, make sure the mailbox's tracking is <strong>on</strong> (below) and you sent it <em>after</em> turning it on.</span></div>
   {% elif f.code == 'testfail' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Couldn't send the test to {{f.email}}.</strong> The send failed at SMTP — check the mailbox's app password (Update password below) and that your network allows outbound port 587. The exact error is on the <a href="/activity">Activity</a> page.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Couldn't send the test to {{f.email}}.</strong> The send failed at SMTP — check the mailbox's app password (Update password below) and that your network allows outbound port 587. The exact error is on the <a href="/activity">Activity</a> page.</span></div>
   {% elif f.code == 'testnomb' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">No active mailbox to send from.</strong> Add a mailbox (or resume a paused one) first, then send the test.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>No active mailbox to send from.</strong> Add a mailbox (or resume a paused one) first, then send the test.</span></div>
   {% elif f.code == 'testsupp' %}
-  <div class="note-box" style="background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong>{{f.email}} is on your suppression list</strong> (unsubscribed or bounced), so nothing was sent. Pick a different test address.</span>
-  </div>
+  <div class="note-box flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>{{f.email}} is on your suppression list</strong> (unsubscribed or bounced), so nothing was sent. Pick a different test address.</span></div>
   {% elif f.code == 'testbad' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">That doesn't look like a valid email address.</strong> Nothing was sent.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>That doesn't look like a valid email address.</strong> Nothing was sent.</span></div>
   {% elif f.code == 'testnoseq' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">No active sequence to attach the test to.</strong> Nothing was sent — create/activate a sequence, then retry.</span>
-  </div>
+  <div class="note-box bad flash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>No active sequence to attach the test to.</strong> Nothing was sent — create/activate a sequence, then retry.</span></div>
   {% endif %}
 {% endif %}
 
 <div class="grid">
-  <div class="card" style="max-width:540px">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>Add mailbox</h2>
+  <!-- ── Add mailbox ─────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>Add mailbox</h2>
     <form method="post" action="/mailboxes/add">
       <label>Email</label>
       <input type="email" name="email" placeholder="ashutosh@getefforti.com" required>
       <label>Display name</label>
       <input type="text" name="display_name" placeholder="Ashutosh from Efforti">
       <label>Gmail app password</label>
-      <div style="position:relative">
-        <input type="password" name="app_password" id="app_password" required style="padding-right:42px">
-        <button type="button" aria-label="Show password" title="Show password"
-          onclick="(function(b){var i=document.getElementById('app_password');var show=i.type==='password';i.type=show?'text':'password';b.querySelector('.eye').style.display=show?'none':'';b.querySelector('.eye-off').style.display=show?'':'none';var t=show?'Hide password':'Show password';b.title=t;b.setAttribute('aria-label',t);})(this)"
-          style="position:absolute;top:0;right:0;height:100%;width:40px;display:flex;align-items:center;justify-content:center;background:none;border:none;cursor:pointer;color:var(--muted,#8b8b9e);padding:0">
-          <svg class="eye" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-          <svg class="eye-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19M6.61 6.61A18.5 18.5 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 5.39-1.61M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="m2 2 20 20"/></svg>
+      <div class="pw-wrap">
+        <input type="password" name="app_password" id="app_password" required>
+        <button type="button" class="pw-eye" aria-label="Show password" title="Show password"
+          onclick="(function(b){var i=document.getElementById('app_password');var show=i.type==='password';i.type=show?'text':'password';b.querySelector('.eye').style.display=show?'none':'';b.querySelector('.eye-off').style.display=show?'':'none';var t=show?'Hide password':'Show password';b.title=t;b.setAttribute('aria-label',t);})(this)">
+          <svg class="eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19M6.61 6.61A18.5 18.5 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 5.39-1.61M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="m2 2 20 20"/></svg>
         </button>
       </div>
-      <label>Sign-in account <span class="muted">— optional; only if the email above is a Gmail "Send mail as" alias</span></label>
+      <label>Sign-in account <span class="muted">— optional; only if the email above is a Gmail “Send mail as” alias</span></label>
       <input type="email" name="login_email" placeholder="ashutoshpalai@remotedesk.com">
-      <div class="muted" style="font-size:12px;margin:-4px 0 4px">Leave blank normally. Set it to the <strong>real Google account</strong> that owns the alias — we sign in as that account (with its app password) but still send <em>from</em> the address above.</div>
-      <div class="note-box" style="margin:16px 0 4px">
-        <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <p class="muted" style="margin-top:6px;line-height:1.55">Leave blank normally. Set it to the <strong>real Google account</strong> that owns the alias — we sign in as that account (with its app password) but still send <em>from</em> the address above.</p>
+      <div class="note-box brand" style="margin-top:16px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
         <span><strong>No sending limit.</strong> Nothing is capped or enforced. For deliverability, the recommended warm-up on a fresh mailbox is about <strong>8 emails on day one, then +2 per day</strong>.</span>
       </div>
-      <div style="margin-top:18px"><button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>Add mailbox</button></div>
+      <div style="margin-top:18px"><button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Add mailbox</button></div>
     </form>
   </div>
-</div>
 
-<div class="grid">
-  <div class="card" style="max-width:540px">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Send a test email</h2>
-    <p class="sub">Send a real email <strong>through the engine</strong> to any address — this is how you verify open &amp; click tracking. Send it to another inbox you control, open it, click the link, then watch <a href="/analytics">Analytics</a> flip that contact to Opened/Clicked.</p>
+  <!-- ── Send a test ─────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Send a test email</h2>
+    <p class="muted" style="line-height:1.6">Send a real email <strong>through the engine</strong> to any address — this is how you verify open &amp; click tracking. Send it to another inbox you control, open it, click the link, then watch <a href="/analytics">Analytics</a> flip that contact to Opened/Clicked.</p>
     <form method="post" action="/test/send">
       <label>Send from</label>
       <select name="mailbox_id">
@@ -141,45 +159,51 @@
       <input type="text" name="subject" value="Quick test from Efforti">
       <label>Body <span class="muted">— leave blank for a default message with a clickable link</span></label>
       <textarea name="body" rows="4" placeholder="Leave blank to use a default test message that already contains a link to click."></textarea>
-      <div class="note-box" style="margin:16px 0 4px">
-        <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <div class="note-box brand" style="margin-top:16px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
         <span>Opens/clicks only record when the chosen mailbox has <strong>tracking on</strong> (toggle below) and <code>APP_BASE_URL</code> points at your public tunnel URL. The recipient is saved as a lead tagged <code>manual</code>.</span>
       </div>
-      <div style="margin-top:16px"><button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Send test email</button></div>
+      <div style="margin-top:16px"><button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Send test email</button></div>
     </form>
   </div>
 </div>
 
-<h2>Configured mailboxes</h2>
-<div class="note-box" style="margin:0 0 16px">
-  <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+<!-- ── Configured mailboxes ──────────────────────────────────────────── -->
+<h2>Configured mailboxes <span class="hint">{{ mailboxes|length }} connected</span></h2>
+<div class="note-box brand" style="margin:0 0 12px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
   <span><strong>No sending limit — send as many as you like.</strong> Nothing is capped or enforced. For deliverability (staying out of spam), the recommended warm-up on a fresh mailbox is roughly <strong>8 emails on day one, then +2 per day</strong> — that's guidance only, never a block. <strong>Sent today</strong> below is counted live from your actual sends.</span>
 </div>
 <div class="note-box" style="margin:0 0 16px">
-  <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><path d="M3 3v18h18"/><path d="m7 14 3-3 4 4 5-6"/></svg>
-  <span><strong>Open &amp; click tracking is off by default.</strong> Turn it on per mailbox (button on the right of each row) to see opens and CTR on Analytics — it adds a 1×1 pixel and wraps links in outgoing HTML. Two cautions: pixels/link-wrapping are cold-email spam signals, so serve tracking links from a <strong>subdomain of your sending domain</strong> (set <code>APP_BASE_URL</code>, e.g. <code>https://track.yourdomain.com</code>), never a raw tunnel/onrender URL for real sending; and <strong>opens are directional</strong> (Apple Mail &amp; Gmail pre-load images) — trust clicks and replies.</span>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 3-3 4 4 5-6"/></svg>
+  <span><strong>Open &amp; click tracking is off by default.</strong> Turn it on per mailbox (button on the right of each row) to see opens and CTR on Analytics — it adds a 1×1 pixel and wraps links in outgoing HTML. Two cautions: pixels and link-wrapping are cold-email spam signals, so serve tracking links from a <strong>subdomain of your sending domain</strong> (set <code>APP_BASE_URL</code>, e.g. <code>https://track.yourdomain.com</code>), never a raw tunnel/onrender URL for real sending; and <strong>opens are directional</strong> (Apple Mail &amp; Gmail pre-load images) — trust clicks and replies.</span>
 </div>
-<div class="tbl"><table>
+
+<div class="tbl tbl-scroll"><table class="mb-tbl">
   <thead><tr><th>Email</th><th>Status</th><th>Sent today</th><th>7-day bounce</th><th></th></tr></thead>
   <tbody>
   {% for m in mailboxes %}
   <tr>
-    <td>{{m.email}}{% if m.display_name %}<div class="sub-line">{{m.display_name}}</div>{% endif %}{% if m.auth_email %}<div class="sub-line">signs in as {{m.auth_email}}</div>{% endif %}</td>
-    <td>{% if m.active %}<span class="tag active">active</span>
-        {% else %}<span class="tag paused">paused</span>{% if m.paused_reason %}<div class="sub-line">{{m.paused_reason}}</div>{% endif %}{% endif %}
-        <div class="sub-line">{% if m.tracking_on %}📊 open/click tracking on{% else %}tracking off{% endif %}</div></td>
+    <td>
+      <strong>{{m.email}}</strong>
+      {% if m.display_name %}<div class="sub-line">{{m.display_name}}</div>{% endif %}
+      {% if m.auth_email %}<div class="sub-line">signs in as {{m.auth_email}}</div>{% endif %}
+    </td>
+    <td>
+      {% if m.active %}<span class="tag active">active</span>
+      {% else %}<span class="tag paused">paused</span>{% if m.paused_reason %}<div class="sub-line">{{m.paused_reason}}</div>{% endif %}{% endif %}
+      <div class="track-line {{'on' if m.tracking_on}}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          {% if m.tracking_on %}<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
+          {% else %}<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19M6.61 6.61A18.5 18.5 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 5.39-1.61M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="m2 2 20 20"/>{% endif %}
+        </svg>
+        {% if m.tracking_on %}open/click tracking on{% else %}tracking off{% endif %}
+      </div>
+    </td>
     <td class="mono">{{ sent_today_map.get(m.email, 0) }}</td>
-    <td class="mono" style="{{'color:var(--bad);font-weight:600' if m.bounce_rate() > 0.03}}">{{'%.1f'|format(m.bounce_rate()*100)}}%</td>
-    <td style="text-align:right">
-      <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap">
-        <form class="inline" method="post" action="/mailboxes/{{m.id}}/password" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <input type="email" name="login_email" placeholder="sign-in account (if alias)"
-                 value="{{m.auth_email}}" autocomplete="off" style="width:190px;padding:6px 8px;margin:0"
-                 title="Only if this mailbox is a Gmail 'Send mail as' alias — the real account to sign in as. Leave blank to sign in as the mailbox address itself.">
-          <input type="password" name="app_password" placeholder="new 16-char app password" required
-                 autocomplete="off" style="width:190px;padding:6px 8px;margin:0">
-          <button class="btn ghost sm">Update password</button>
-        </form>
+    <td class="mono" style="{{'color:var(--bad);font-weight:660' if m.bounce_rate() > 0.03}}">{{'%.1f'|format(m.bounce_rate()*100)}}%</td>
+    <td>
+      <div class="mb-actions">
         <form class="inline" method="post" action="/mailboxes/{{m.id}}/toggle">
           <button class="btn ghost sm">{{'Pause' if m.active else 'Resume'}}</button>
         </form>
@@ -187,30 +211,46 @@
               title="Add a 1x1 open pixel and wrap links so opens/clicks (CTR) show on Analytics. Off by default — only turn on once your tracking domain is set (see APP_BASE_URL).">
           <button class="btn ghost sm">{{'Turn tracking off' if m.tracking_on else 'Turn tracking on'}}</button>
         </form>
+        <details class="pwdet">
+          <summary title="Replace this mailbox's Gmail app password"><span class="btn ghost sm">Update password</span></summary>
+          <div class="pwpop">
+            <form method="post" action="/mailboxes/{{m.id}}/password">
+              <label>Sign-in account <span class="muted">— only if alias</span></label>
+              <input type="email" name="login_email" placeholder="sign-in account (if alias)"
+                     value="{{m.auth_email}}" autocomplete="off"
+                     title="Only if this mailbox is a Gmail 'Send mail as' alias — the real account to sign in as. Leave blank to sign in as the mailbox address itself.">
+              <label>New app password</label>
+              <input type="password" name="app_password" placeholder="16-char app password" required
+                     autocomplete="off">
+              <div class="go"><button class="btn sm">Save password</button></div>
+            </form>
+          </div>
+        </details>
       </div>
     </td>
   </tr>
   {% else %}
   <tr><td colspan="5"><div class="empty">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>
     <p>No mailboxes yet — add your first sending account above.</p></div></td></tr>
   {% endfor %}
   </tbody>
 </table></div>
 
+<!-- ── Signatures ────────────────────────────────────────────────────── -->
 <h2>Email signatures</h2>
-<p class="sub">Gmail's built-in signature is <strong>not</strong> applied when the app sends over SMTP, so each mailbox appends its own branded block here. Set it per mailbox, then preview exactly what recipients see.</p>
+<p class="sub" style="margin-bottom:16px">Gmail's built-in signature is <strong>not</strong> applied when the app sends over SMTP, so each mailbox appends its own branded block here. Set it per mailbox, then preview exactly what recipients see.</p>
 {% for m in mailboxes %}
-<details class="card" style="max-width:820px;margin-bottom:14px"{% if mb_feedback and mb_feedback.email == m.email and mb_feedback.code in ['sigok','logobig','logotype'] %} open{% endif %}>
-  <summary style="cursor:pointer;font-weight:600">
+<details class="card sig"{% if mb_feedback and mb_feedback.email == m.email and mb_feedback.code in ['sigok','logobig','logotype'] %} open{% endif %}>
+  <summary>
     {{m.email}}
-    {% if m.signature_on %}<span class="tag active" style="margin-left:8px">signature on</span>
-    {% else %}<span class="tag paused" style="margin-left:8px">signature off</span>{% endif %}
+    {% if m.signature_on %}<span class="tag active">signature on</span>
+    {% else %}<span class="tag paused">signature off</span>{% endif %}
   </summary>
-  <div style="display:flex;gap:28px;flex-wrap:wrap;margin-top:18px">
-    <form method="post" action="/mailboxes/{{m.id}}/signature" enctype="multipart/form-data" style="flex:1 1 320px;min-width:280px">
-      <label style="display:flex;align-items:center;gap:8px;font-weight:500">
-        <input type="checkbox" name="signature_on" value="on" {% if m.signature_on %}checked{% endif %} style="width:auto;margin:0">
+  <div class="sig-body">
+    <form method="post" action="/mailboxes/{{m.id}}/signature" enctype="multipart/form-data">
+      <label class="checkline">
+        <input type="checkbox" name="signature_on" value="on" {% if m.signature_on %}checked{% endif %}>
         Append this signature to emails from {{m.email}}
       </label>
       <label>Name <span class="muted">— shown in your signature and as the sender name on the From: line</span></label>
@@ -226,23 +266,29 @@
       <label>Logo <span class="muted">— PNG/JPG/GIF, under 300&nbsp;KB, embedded in every email</span></label>
       {% if m.logo_b64 %}
       <div class="muted" style="margin:4px 0 8px">A logo is set.
-        <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400">
-          <input type="checkbox" name="remove_logo" value="on" style="width:auto;margin:0"> remove it</label></div>
+        <label class="checkline" style="display:inline-flex;font-weight:440;margin:0 0 0 4px">
+          <input type="checkbox" name="remove_logo" value="on"> remove it</label>
+      </div>
       {% endif %}
       <input type="file" name="logo" accept="image/png,image/jpeg,image/gif">
-      <div style="margin-top:18px"><button class="btn">Save signature</button></div>
+      <div style="margin-top:18px"><button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Save signature</button></div>
     </form>
-    <div style="flex:1 1 320px;min-width:280px">
+    <div>
       <div class="muted" style="margin-bottom:8px">Preview — what recipients see</div>
-      <div style="border:1px solid var(--border-2);border-radius:10px;padding:18px;background:#ffffff;color:#000;max-width:100%;overflow-x:auto">
+      <div class="sig-preview">
         <div style="color:#555;font-size:13px">…your email message…</div>
         {{ sig_previews[m.id]|safe }}
       </div>
-      {% if not m.signature_on %}<div class="muted" style="margin-top:8px">Signature is currently <strong>off</strong> — this block won't be sent until you enable it above.</div>{% endif %}
+      {% if not m.signature_on %}
+      <div class="muted" style="margin-top:8px">Signature is currently <strong>off</strong> — this block won't be sent until you enable it above.</div>
+      {% endif %}
     </div>
   </div>
 </details>
 {% else %}
-<p class="muted">Add a mailbox above first, then set its signature here.</p>
+<div class="card"><div class="empty">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>
+  <p>Add a mailbox above first, then set its signature here.</p>
+</div></div>
 {% endfor %}
 {% endblock %}

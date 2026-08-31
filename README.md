@@ -20,6 +20,12 @@ services. Built for ~300–1,300 emails/week across a handful of Gmail mailboxes
 - **Sequences** — 3-touch by default (Day 0 / +3 / +5). Follow-ups thread as
   "Re:" replies via In-Reply-To headers. Jinja2 personalization:
   `{{first_name}}`, `{{company}}`, `{{title}}`, `{{trigger}}`.
+- **Competitive social proof** — each of the 8 first-touch mailers names three
+  peer brands through `{{n1}} {{n2}} {{n3}}` (or `{{peers}}` for "A, B and C").
+  The names come from the *reader's own* niche, never include the reader's own
+  company, and are chosen stably per company so a preview and the real send
+  always agree. Pools live in `app/peers.py`, one list per Industry-focus
+  vertical — edit them there.
 - **Sends safely**: per-mailbox daily caps with a warm-up ramp (8/day, +2/day,
   up to cap), business-hours-only in the lead's timezone, weekdays only,
   randomized jitter, round-robin across mailboxes.
@@ -38,8 +44,12 @@ services. Built for ~300–1,300 emails/week across a handful of Gmail mailboxes
 ```bash
 pip install -r requirements.txt
 ./run.sh
-# open http://localhost:8000
+# open http://localhost:8000       — landing page
+# the workspace itself is at /dashboard
 ```
+
+`/` is the landing page; **`/dashboard`** is the workspace the sidebar links
+into (Leads, Sequences, Mailboxes, Replies, Analytics, Activity).
 
 1. Mailboxes → add a real Gmail/Workspace mailbox (email + app password).
 2. Leads → pull from Apollo or import a CSV (needs an Email column).
@@ -99,6 +109,8 @@ app/
   emailer.py    SMTP send, threading headers, unsubscribe footer
   scheduler.py  APScheduler jobs: due sends (5 min), IMAP poll (10 min),
                 counter decay (daily)
+  mailers.py    The 8 editable first-touch variants (4 O&M/FM, 4 Construction/EPC)
+  peers.py      Peer brand pools per niche; fills the n1/n2/n3 competitor tokens
   seed.py       Default Efforti 3-touch sequence
   ui/           Templates
 ```

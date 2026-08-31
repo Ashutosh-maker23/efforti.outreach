@@ -14,6 +14,7 @@ from email.utils import formatdate
 from jinja2 import Template
 
 from .models import Enrollment, Lead, Mailbox, Message, log, utcnow
+from .peers import peer_tokens
 
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 
@@ -27,7 +28,7 @@ BRAND_BLURB = (
 )
 
 
-def render(template_str: str, lead: Lead) -> str:
+def render(template_str: str, lead: Lead, niche: str = "") -> str:
     # `intro` holds the AI-written, brand-specific two-paragraph block for the
     # primary email (see enrich.ensure_personalization). `personalization` is that
     # block wrapped in the blank lines that make it drop cleanly into the body
@@ -46,6 +47,12 @@ def render(template_str: str, lead: Lead) -> str:
         opener=(getattr(lead, "opener", "") or ""),
         personalization=personalization,
         research=getattr(lead, "company_research", "") or "",
+        # n1 / n2 / n3 / peers: three competitor brands from the READER's own
+        # niche, never the reader's own company, stable per company so a preview
+        # and the real send always agree (see app/peers.py). `niche` is only a
+        # fallback hint (the picked mailer's vertical), used for leads whose own
+        # industry and description tell us nothing.
+        **peer_tokens(lead, niche),
     )
 
 

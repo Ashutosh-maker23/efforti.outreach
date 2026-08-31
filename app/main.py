@@ -34,12 +34,13 @@ from .emailer import (APP_BASE_URL, send as send_email,
 from .mailers import get_mailer, mailers_grouped, seed_mailers
 from .importer import import_csv, import_from_sent
 from .research import research_companies
+from .tracking import classify_source, count_policy, short_agent
 # NOTE: personalization is generated on demand at send time (enrich.ensure_
 # personalization, called from the scheduler) — there is no bulk pre-generate
 # route, so enrich_leads is intentionally not imported here.
 from .models import (Enrollment, Event, Lead, Mailbox, Message, Reply,
                      SessionLocal, Sequence, SequenceStep, Suppression,
-                     get_metric, init_db, log, set_metric, utcnow)
+                     TrackHit, get_metric, init_db, log, set_metric, utcnow)
 from .scheduler import (poll_inboxes, poll_now, process_due_sends,
                         send_enrollment_step, weekly_counter_decay)
 from .seed import (REANCHOR_AT, reanchor_inflight_to_monday,
@@ -142,7 +143,7 @@ def ctx(request, db, **kw):
 @app.post("/context/mailbox")
 def switch_mailbox(request: Request, mailbox_id: str = Form("")):
     """Set (or clear) the active mailbox, then return to where you were."""
-    dest = request.headers.get("referer") or "/"
+    dest = request.headers.get("referer") or "/dashboard"
     resp = RedirectResponse(dest, status_code=303)
     if mailbox_id and mailbox_id.isdigit():
         resp.set_cookie("mb", mailbox_id, max_age=31536000,
@@ -152,8 +153,56 @@ def switch_mailbox(request: Request, mailbox_id: str = Form("")):
     return resp
 
 
-# ---------------- Dashboard ----------------
+# ---------------- Landing page ----------------
 @app.get("/", response_class=HTMLResponse)
+def landing(request: Request):
+    """Public front door. Purely presentational — it reads a handful of live
+    totals so the hero preview shows this workspace's real numbers, then hands
+    off to /dashboard where the actual work happens."""
+    db = SessionLocal()
+    try:
+        leads = db.query(Lead).filter(Lead.status != "off_icp").count()
+        contacted = db.query(Message.lead_email).filter(
+            Message.status == "sent").distinct().count()
+        sent = db.query(Message).filter(Message.status == "sent").count()
+        replies = db.query(Reply).count()
+        mailboxes = db.query(Mailbox).count()
+        scopes = [""] + [str(m.id) for m in db.query(Mailbox).all()]
+        demo = sum(get_metric(db, "demo", s) for s in scopes)
+        converted = sum(get_metric(db, "converted", s) for s in scopes)
+
+        # 14-day send sparkline, normalised to the tallest day.
+        start = (utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                 - timedelta(days=13))
+        rows = (db.query(func.date(Message.sent_at), func.count())
+                .filter(Message.status == "sent", Message.sent_at >= start)
+                .group_by(func.date(Message.sent_at)).all())
+        by_day = {str(d): n for d, n in rows}
+        days = [(start + timedelta(days=i)).date().isoformat() for i in range(14)]
+        counts = [by_day.get(d, 0) for d in days]
+        peak = max(counts) or 1
+        spark = [max(6, round(c / peak * 100)) for c in counts]
+
+        def pct(n):
+            return round(n / leads * 100) if leads else 0
+
+        stats = {
+            "leads": leads, "contacted": contacted, "sent": sent,
+            "replies": replies, "mailboxes": mailboxes,
+            "demo": demo, "converted": converted,
+            "reply_rate": round(replies / contacted * 100) if contacted else 0,
+            "pct_contacted": pct(contacted), "pct_replied": pct(replies),
+            "pct_demo": pct(demo), "pct_converted": pct(converted),
+            "spark": spark,
+        }
+        return templates.TemplateResponse(request, "landing.html",
+                                          {"request": request, "stats": stats})
+    finally:
+        db.close()
+
+
+# ---------------- Dashboard ----------------
+@app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request, polled: int = 0, pollskip: int = 0, saved: int = 0):
     db = SessionLocal()
     try:
@@ -265,7 +314,7 @@ def update_metrics(request: Request, demo: str = Form("0"),
         log(db, "metric", f"Demo/converted set to {d}/{c}"
                           f"{' for ' + mb.email if mb else ' (all mailboxes)'}")
         db.commit()
-        return RedirectResponse("/?saved=1", status_code=303)
+        return RedirectResponse("/dashboard?saved=1", status_code=303)
     finally:
         db.close()
 
@@ -1124,36 +1173,11 @@ def sequences_page(request: Request, m: str = "", saved: int = 0):
     db = SessionLocal()
     try:
         seqs = db.query(Sequence).all()
-        # Current follow-up cadence = wait_days on the first follow-up step
-        cadence = 3
-        first = db.query(Sequence).first()
-        if first:
-            fus = [s for s in first.steps if s.step_index > 0]
-            if fus:
-                cadence = fus[0].wait_days
         return templates.TemplateResponse(request, "sequences.html",
                                           ctx(request, db, sequences=seqs,
-                                              cadence=cadence,
                                               mailers=mailers_grouped(db),
                                               selected_mailer=m,
                                               mailer_saved=bool(saved)))
-    finally:
-        db.close()
-
-
-@app.post("/sequences/followup_gap")
-def set_followup_gap(days: int = Form(...)):
-    """Set the gap (in working days, Mon-Fri) between every follow-up touch
-    across all sequences. The scheduler counts these in business days, so
-    weekends are skipped and no touch lands on a weekend."""
-    db = SessionLocal()
-    try:
-        days = max(1, min(30, days))
-        for step in db.query(SequenceStep).filter(SequenceStep.step_index > 0).all():
-            step.wait_days = days
-        log(db, "sequence", f"Follow-up cadence set to every {days} working days")
-        db.commit()
-        return RedirectResponse("/sequences", status_code=303)
     finally:
         db.close()
 
@@ -1497,20 +1521,69 @@ _NO_CACHE = {"Cache-Control": "no-store, no-cache, must-revalidate, private",
              "Pragma": "no-cache", "Expires": "0"}
 
 
+def record_hit(db, m: Message, kind: str, request: Request):
+    """Write down one raw fetch, then decide whether it counts.
+
+    The order matters: the row lands in `track_hits` whatever the verdict is, so
+    a refused fetch is never simply gone. Every number the app shows can be
+    traced back to the requests behind it — which user-agent, which address, how
+    long after the send, counted or not, and why.
+
+    Returns (counted, hit)."""
+    ua = short_agent(request.headers.get("user-agent", ""))
+    source = classify_source(ua)
+    now = utcnow()
+    delay = None
+    if m.sent_at is not None:
+        try:
+            delay = (now - m.sent_at).total_seconds()
+        except TypeError:                     # naive/aware mismatch
+            delay = None
+    prior = db.query(TrackHit).filter(TrackHit.message_id == m.id,
+                                      TrackHit.kind == kind).count()
+    counted, reason = count_policy(source, delay, prior)
+    hit = TrackHit(message_id=m.id, lead_email=m.lead_email,
+                   step_index=m.step_index, kind=kind, user_agent=ua,
+                   remote_ip=(request.client.host if request.client else ""),
+                   delay_seconds=delay, source=source, counted=counted,
+                   reason=reason, created_at=now)
+    db.add(hit)
+    return counted, hit
+
+
 @app.get("/t/o/{token}.gif")
-def track_open(token: str):
-    """Open-pixel endpoint. The recipient's email client loads this image, which
-    records an open on the matching message. Opens are DIRECTIONAL only — Apple
-    Mail Privacy Protection and Gmail's image proxy pre-fetch images, so treat
-    this as a soft signal and weight clicks/replies far more heavily."""
+def track_open(token: str, request: Request):
+    """Open-pixel endpoint.
+
+    NOT every fetch is a person. Gmail's GoogleImageProxy downloads every image
+    the moment a message is DELIVERED, and Apple Mail Privacy Protection and the
+    corporate link scanners do the same — all of them seconds after we send,
+    before anyone has looked at anything. Counting those made every Gmail address
+    show as an opener within a breath of the send.
+
+    So each fetch is classified (app/tracking.py) by user-agent and by how long
+    after the send it arrived. Machines are recorded as `prefetch_count` and
+    never touch opened_at or the activity log. Only a human fetch counts, and
+    REPEAT human opens are logged too, so re-opening a test mail is visible
+    instead of silently bumping a counter nobody can see."""
     db = SessionLocal()
     try:
         m = db.query(Message).filter(Message.track_token == token).first()
         if m:
-            m.open_count = (m.open_count or 0) + 1
-            if not m.opened_at:
-                m.opened_at = utcnow()
-                log(db, "open", f"{m.lead_email} opened step {m.step_index + 1}")
+            counted, hit = record_hit(db, m, "open", request)
+            m.open_agent = hit.user_agent
+            if not counted:
+                m.prefetch_count = (m.prefetch_count or 0) + 1
+            else:
+                m.open_count = (m.open_count or 0) + 1
+                if not m.opened_at:
+                    m.opened_at = utcnow()
+                    log(db, "open",
+                        f"{m.lead_email} opened step {m.step_index + 1}")
+                else:
+                    log(db, "open", f"{m.lead_email} opened step "
+                                    f"{m.step_index + 1} again "
+                                    f"({m.open_count} times)")
             db.commit()
     finally:
         db.close()
@@ -1518,7 +1591,7 @@ def track_open(token: str):
 
 
 @app.get("/t/c/{token}")
-def track_click(token: str, u: str = ""):
+def track_click(token: str, request: Request, u: str = ""):
     """Click-redirect endpoint. Records a click on the matching message, then
     302s to the real destination. A click also back-fills an open (the pixel is
     often blocked even when the link is followed). Only http/https targets are
@@ -1530,6 +1603,16 @@ def track_click(token: str, u: str = ""):
     try:
         m = db.query(Message).filter(Message.track_token == token).first()
         if m:
+            # Link scanners (SafeLinks, Proofpoint, Mimecast) FOLLOW every link
+            # at delivery to check it. Unfiltered, that is a fake click — the
+            # metric you actually steer on. Same classifier as the pixel; the
+            # redirect below happens either way, so a real recipient behind a
+            # scanner still reaches the page.
+            counted, _hit = record_hit(db, m, "click", request)
+            if not counted:
+                m.prefetch_count = (m.prefetch_count or 0) + 1
+                db.commit()
+                return RedirectResponse(dest, status_code=302)
             m.click_count = (m.click_count or 0) + 1
             if not m.clicked_at:
                 m.clicked_at = utcnow()

@@ -1,6 +1,34 @@
 {% extends "base.html" %}
 {% set active_nav = 'analytics' %}
 {% block title %}Analytics{% endblock %}
+
+{% block head_extra %}
+<style>
+  /* Sends-over-time chart */
+  .chart{display:flex;align-items:flex-end;gap:6px;height:150px}
+  .chart .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;
+    min-width:0}
+  .chart .well{flex:1;display:flex;align-items:flex-end;width:100%;position:relative;
+    border-radius:7px 7px 0 0;background:var(--surface-3)}
+  .chart .bar{width:100%;border-radius:7px 7px 0 0;min-height:4px;
+    background:linear-gradient(180deg,var(--grad-1),var(--grad-3));
+    transition:filter var(--t-fast),transform var(--t-fast);
+    animation:barGrow .8s var(--ease-out) both}
+  .chart .col:hover .bar{filter:brightness(1.12)}
+  .chart .cap{font-size:9.5px;color:var(--text-3);white-space:nowrap;font-variant-numeric:tabular-nums}
+  @keyframes barGrow{from{height:0 !important}}
+  .chart-legend{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-top:16px;
+    padding-top:14px;border-top:1px solid var(--border);font-size:12.5px;color:var(--text-2)}
+  .chart-legend strong{color:var(--text);font-variant-numeric:tabular-nums;font-weight:660}
+  /* Engagement table */
+  .eng th:not(:nth-child(-n+3)),.eng td:not(:nth-child(-n+3)){text-align:center}
+  .eng .mark{font-weight:700}
+  .eng .mark.no{color:var(--text-4);font-weight:400}
+  .eng .mark.open{color:var(--ok)}
+  .eng .mark.click{color:var(--accent-ink)}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-head">
   <div class="row">
@@ -11,108 +39,114 @@
 </div>
 
 <!-- Headline metrics -->
-<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(155px,1fr))">
+<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,238px),1fr))">
   <div class="tile">
-    <div class="tl">Emails sent</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Emails sent</div>
     <div class="num">{{a.sent_total}}</div>
     <div class="note">{{a.contacted}} people contacted</div>
   </div>
   <div class="tile">
-    <div class="tl">Follow-ups</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Follow-ups</div>
     <div class="num">{{a.followups}}</div>
     <div class="note">of {{a.sent_total}} total touches</div>
   </div>
   <div class="tile accent">
-    <div class="tl">Reply rate</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Reply rate</div>
     <div class="num">{{a.reply_rate}}%</div>
     <div class="note">{{a.replied}} replies received</div>
   </div>
   <div class="tile">
-    <div class="tl">Open rate</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Open rate</div>
     <div class="num">{% if a.tracked_people %}{{a.open_rate}}%{% else %}—{% endif %}</div>
     <div class="note">{% if a.tracked_people %}{{a.openers}} of {{a.tracked_people}} tracked opened{% else %}tracking off{% endif %}</div>
   </div>
   <div class="tile accent">
-    <div class="tl">Click rate (CTR)</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M15 13a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>Click rate (CTR)</div>
     <div class="num">{% if a.tracked_people %}{{a.ctr}}%{% else %}—{% endif %}</div>
     <div class="note">{% if a.tracked_people %}{{a.clickers}} clicked · {{a.click_to_open}}% of openers{% else %}enable per mailbox{% endif %}</div>
   </div>
   <div class="tile">
-    <div class="tl">Avg response</div>
-    <div class="num" style="font-size:26px">{{a.avg_response}}</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Avg response</div>
+    <div class="num" style="font-size:25px">{{a.avg_response}}</div>
     <div class="note">first reply after send</div>
   </div>
   <div class="tile">
-    <div class="tl">Bounce rate</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>Bounce rate</div>
     <div class="num" style="{{'color:var(--bad)' if a.bounce_rate > 3}}">{{a.bounce_rate}}%</div>
     <div class="note">{{a.bounced}} bounced · keep under 3%</div>
   </div>
   <div class="tile">
-    <div class="tl">Unsubscribed</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></svg>Unsubscribed</div>
     <div class="num">{{a.unsub}}</div>
     <div class="note">opt-outs honored instantly</div>
   </div>
 </div>
 
 <!-- Sends over time -->
-<h2>Sends — last 14 days</h2>
+<h2>Sends <span class="hint">last 14 days</span></h2>
 <div class="card">
   {% if a.sent_total %}
-  <div style="display:flex;align-items:flex-end;gap:5px;height:130px">
+  <div class="chart">
     {% for t in a.timeline %}
-    <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:7px;height:100%">
-      <div style="flex:1;display:flex;align-items:flex-end;width:100%;position:relative">
-        <div title="{{t.count}} sent" style="width:100%;height:{{t.pct}}%;min-height:3px;border-radius:6px 6px 0 0;background:linear-gradient(180deg,var(--grad-1),var(--grad-3));transition:height .3s"></div>
+    <div class="col">
+      <div class="well">
+        <div class="bar" title="{{t.count}} sent on {{t.label}}"
+             style="height:{{ t.pct if t.pct else 3 }}%;animation-delay:{{ loop.index0 * 30 }}ms"></div>
       </div>
-      <div style="font-size:10px;color:var(--text-3);white-space:nowrap">{{t.label}}</div>
+      <div class="cap">{{t.label}}</div>
     </div>
     {% endfor %}
   </div>
+  <div class="chart-legend">
+    <span>Total in window <strong>{{ a.timeline | sum(attribute='count') }}</strong></span>
+    <span>Busiest day <strong>{{ a.timeline | map(attribute='count') | max }}</strong> sends</span>
+    <span>All-time sent <strong>{{a.sent_total}}</strong></span>
+  </div>
   {% else %}
-  <div class="empty" style="padding:24px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 3v18h18"/><path d="m7 14 3-3 4 4 5-6"/></svg>
+  <div class="empty" style="padding:26px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 3-3 4 4 5-6"/></svg>
     <p>No sends yet — enroll leads and run a cycle to see volume build here.</p>
   </div>
   {% endif %}
 </div>
 
 <!-- Touch breakdown -->
-<h2>Touch breakdown</h2>
-<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
-  <div class="tile"><div class="tl">Openers (step 1)</div><div class="num">{{a.step_counts.get(0,0)}}</div></div>
-  <div class="tile"><div class="tl">Follow-up 1 (step 2)</div><div class="num">{{a.step_counts.get(1,0)}}</div></div>
-  <div class="tile"><div class="tl">Follow-up 2 (step 3)</div><div class="num">{{a.step_counts.get(2,0)}}</div></div>
+<h2>Touch breakdown <span class="hint">where your volume actually sits</span></h2>
+<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
+  <div class="tile"><div class="tl">Openers (step 1)</div><div class="num">{{a.step_counts.get(0,0)}}</div><div class="note">first touches sent</div></div>
+  <div class="tile"><div class="tl">Follow-up 1 (step 2)</div><div class="num">{{a.step_counts.get(1,0)}}</div><div class="note">in-thread replies</div></div>
+  <div class="tile"><div class="tl">Follow-up 2 (step 3)</div><div class="num">{{a.step_counts.get(2,0)}}</div><div class="note">in-thread replies</div></div>
   <div class="tile"><div class="tl">Pulled from Apollo</div><div class="num">{{a.apollo_pulled}}</div><div class="note">real contacts sourced</div></div>
 </div>
 
 <!-- Per-person engagement -->
 <h2>People <span class="hint">every contact and how they're engaging</span></h2>
-<div class="tbl"><table>
+<div class="tbl tbl-scroll"><table class="eng">
   <thead><tr><th>Name</th><th>Brand</th><th>Position</th><th>Status</th><th>Mails</th><th>Follow-ups</th><th>Opened</th><th>Clicked</th><th>Contacted</th><th>Response time</th></tr></thead>
   <tbody>
   {% for r in a.rows %}
   <tr>
-    <td>{{r.name}}</td>
+    <td><strong>{{r.name}}</strong></td>
     <td>{{r.company}}</td>
     <td class="muted">{{r.title}}</td>
     <td><span class="tag {{r.status}}">{{r.status}}</span></td>
     <td class="mono">{{r.mails}}</td>
     <td class="mono">{{r.followups}}</td>
-    <td class="mono" style="{{'color:var(--ok);font-weight:600' if r.opened}}">{{'✓' if r.opened else '—'}}</td>
-    <td class="mono" style="{{'color:var(--accent);font-weight:700' if r.clicked}}">{{'✓' if r.clicked else '—'}}</td>
+    <td class="mark {{'open' if r.opened else 'no'}}">{{'✓' if r.opened else '—'}}</td>
+    <td class="mark {{'click' if r.clicked else 'no'}}">{{'✓' if r.clicked else '—'}}</td>
     <td class="muted mono">{{ r.contacted_at.strftime('%d %b') if r.contacted_at else '—' }}</td>
-    <td class="mono" style="{{'color:var(--ok);font-weight:600' if r.response}}">{{r.response or '—'}}</td>
+    <td class="mono" style="{{'color:var(--ok);font-weight:640' if r.response}}">{{r.response or '—'}}</td>
   </tr>
   {% else %}
   <tr><td colspan="10"><div class="empty">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
     <p>No people yet — pull leads to populate this.</p></div></td></tr>
   {% endfor %}
   </tbody>
 </table></div>
 
-<div class="note-box" style="margin-top:22px">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-  <span><strong>About the data.</strong> Everything here is first-party. Replies come from polling your own mailboxes over IMAP; opens and clicks come from a 1×1 pixel and wrapped links on emails sent from tracking-enabled mailboxes (turn tracking on per mailbox on the Mailboxes page). <strong>Opens are directional</strong> — Apple Mail Privacy Protection and Gmail's image proxy pre-load the pixel, inflating opens and even back-filling one on a click — so weight clicks and replies more heavily. Bounce and unsubscribe are captured automatically at send and poll time.</span>
+<div class="note-box info" style="margin-top:22px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+  <span><strong>About the data.</strong> Everything here is first-party. Replies come from polling your own mailboxes over IMAP; opens and clicks come from a 1×1 pixel and wrapped links on emails sent from tracking-enabled mailboxes (turn tracking on per mailbox on the <a href="/mailboxes">Mailboxes</a> page). <strong>Opens are directional</strong> — Apple Mail Privacy Protection and Gmail's image proxy pre-load the pixel, inflating opens and even back-filling one on a click — so weight clicks and replies more heavily. Bounce and unsubscribe are captured automatically at send and poll time.</span>
 </div>
 {% endblock %}

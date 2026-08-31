@@ -20,7 +20,8 @@ from email.header import decode_header, make_header
 
 from .emailer import send
 from .enrich import ensure_personalization
-from .mailers import mailer_content
+from .mailers import mailer_content, mailer_niche
+from .peers import apply_niche_hint
 from .models import (Enrollment, Event, Lead, Mailbox, Message, Reply,
                      claim_send_slot, release_stale_claims,
                      SessionLocal, Suppression, log, utcnow)
@@ -345,6 +346,10 @@ def send_enrollment_step(db, enr, step_index, cc=None, bcc=None, mailer=None):
         return "already_sent"
     step = steps[step_index]
     subject, body = step.subject, step.body
+    # Vertical of the chosen first-touch variant, parked on the lead as the
+    # fallback signal for the peer-brand tokens. The lead's own industry still
+    # wins wherever we have it (see peers.niche_for_lead).
+    apply_niche_hint(lead, mailer_niche(db, mailer) if mailer else "")
     # First-touch variant: if the operator chose a mailer for this step-0 send,
     # its subject/body REPLACE the sequence's step-0 content (its subject becomes
     # the thread subject that every follow-up then replies under).

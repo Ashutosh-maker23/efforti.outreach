@@ -1,6 +1,148 @@
 {% extends "base.html" %}
 {% set active_nav = 'leads' %}
 {% block title %}Leads{% endblock %}
+
+{% block head_extra %}
+<style>
+/* ── Leads workspace ──────────────────────────────────────────────────── */
+
+/* Source panel */
+.src-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));
+  align-items:start;margin-bottom:28px}
+.src-card{display:flex;flex-direction:column}
+.src-sub{font-size:12.5px;color:var(--text-3);line-height:1.6;margin-bottom:4px}
+.tool-block{margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
+.tool-block p{font-size:12.5px;color:var(--text-3);line-height:1.6;margin-bottom:11px}
+
+/* Multi-select pickers */
+.msel{position:relative}
+.msel-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  padding:8.5px 12px;border:1px solid var(--border-2);border-radius:9px;background:var(--surface);
+  color:var(--text);font:inherit;font-size:13px;font-weight:600;cursor:pointer;text-align:left;
+  transition:border-color var(--t-fast),box-shadow var(--t-fast)}
+.msel-btn:hover{border-color:var(--border-3)}
+.msel-btn svg{width:15px;height:15px;flex:none;stroke-width:2.2;color:var(--text-3);
+  transition:transform var(--t)}
+.msel.open .msel-btn{border-color:var(--accent);box-shadow:var(--ring)}
+.msel.open .msel-btn svg{transform:rotate(180deg)}
+.msel-btn span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msel-btn .ph{color:var(--text-4);font-weight:500}
+.msel-panel{display:none;position:absolute;z-index:25;top:calc(100% + 5px);left:0;right:0;
+  max-height:280px;overflow-y:auto;padding:6px;background:var(--surface);
+  border:1px solid var(--border-2);border-radius:11px;box-shadow:var(--sh-4)}
+.msel.open .msel-panel{display:block}
+.msel-opt{display:flex;align-items:center;gap:9px;margin:0;padding:7px 10px;border-radius:8px;
+  font-size:12.5px;font-weight:500;color:var(--text);cursor:pointer;
+  transition:background var(--t-fast)}
+.msel-opt:hover{background:var(--surface-3)}
+.msel-opt input{flex:none;margin:0}
+.msel-group{font-size:9.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--text-4);padding:9px 10px 4px;margin-top:2px}
+.msel-group:first-child{margin-top:0}
+
+/* Preview summary */
+.pv-stats{display:flex;align-items:center;gap:26px;flex-wrap:wrap}
+.pv-stat .v{font-size:26px;font-weight:700;letter-spacing:-.038em;font-variant-numeric:tabular-nums;
+  line-height:1.1}
+.pv-stat .l{font-size:11px;font-weight:660;letter-spacing:.075em;text-transform:uppercase;
+  color:var(--text-3);margin-top:5px}
+.pv-stat.hot .v{color:var(--accent-ink)}
+
+/* Send controls */
+.ctlbar{display:flex;align-items:center;gap:11px;margin:0 0 10px;padding:10px 14px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  flex-wrap:wrap;font-size:12.5px;box-shadow:var(--sh-1)}
+.ctlbar > label{display:flex;align-items:center;gap:7px;font-weight:640;margin:0;
+  color:var(--text);white-space:nowrap;font-size:12.5px}
+.ctlbar > label svg{width:15px;height:15px;stroke-width:2;color:var(--accent);flex:none}
+.ctlbar select{width:auto;min-width:240px;max-width:100%;font-weight:600;margin:0;
+  padding:7px 30px 7px 11px}
+.ctlbar .why{color:var(--text-3);font-size:11.5px;line-height:1.45;flex:1 1 240px;min-width:0}
+.ccbcc{margin:0 0 10px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r);box-shadow:var(--sh-1)}
+.ccbcc-fields{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px}
+.ccbcc-f{flex:1 1 240px;min-width:0}
+.ccbcc-f label{margin:0 0 5px}
+.ccbcc-f input{margin:0}
+
+/* Selection tools + filters */
+.seltools{display:flex;align-items:center;gap:10px;margin:14px 0 12px;font-size:12.5px;
+  flex-wrap:wrap}
+.seltools .selall{display:flex;align-items:center;gap:8px;font-weight:560;margin:0;
+  color:var(--text);font-size:12.5px}
+.seltools input[type=number]{width:64px;padding:6px 8px;margin:0}
+.leadfilters{display:flex;align-items:center;gap:14px;margin-left:auto;flex-wrap:wrap}
+.leadfilters .ff{display:flex;align-items:center;gap:7px;margin:0}
+.leadfilters .ff > span{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--text-4)}
+.leadfilters select{width:auto;min-width:158px;margin:0;padding:7px 30px 7px 11px;
+  font-size:12.5px;font-weight:600;background-position:right 10px center}
+
+/* Bulk action bar */
+.bulkbar{display:flex;align-items:center;gap:14px;padding:11px 15px;margin-bottom:14px;
+  background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:var(--r);
+  position:sticky;top:calc(var(--topbar) + 8px);z-index:20;flex-wrap:wrap;
+  box-shadow:var(--sh-2);animation:flashIn .28s var(--ease-out) both}
+.bulkbar b{font-weight:700;font-variant-numeric:tabular-nums}
+.bulkbar .lead{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--accent-ink);
+  font-weight:600}
+.bulkbar .lead svg{width:16px;height:16px;stroke-width:2.2}
+.bulkbar .why{color:var(--text-2);font-size:11.5px;flex:1 1 200px;min-width:0}
+.bulkbar .bb-btns{display:flex;gap:8px;flex-wrap:wrap}
+
+/* Lead rows */
+.lead-tbl td{vertical-align:top;padding-top:11px;padding-bottom:11px}
+.lead-tbl td:first-child{width:36px;vertical-align:middle}
+/* Give the step strip room so it stays on one line at desktop widths. */
+.lead-tbl th:nth-child(5),.lead-tbl td:nth-child(5){min-width:250px}
+.lead-tbl th:last-child,.lead-tbl td:last-child{width:40px}
+.lcb{width:16px;height:16px;cursor:pointer;accent-color:var(--accent);margin:0;flex-shrink:0;
+  vertical-align:middle}
+.who{display:flex;gap:10px;align-items:flex-start;min-width:0}
+.avatar{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;
+  font-size:12px;font-weight:700;color:var(--accent-ink);background:var(--accent-soft);
+  border:1px solid var(--accent-line);text-transform:uppercase;letter-spacing:-.02em;margin-top:1px}
+.who .meta{min-width:0}
+.contact-em{font-weight:620;letter-spacing:-.012em;word-break:break-word}
+.contact-sub{font-size:11.5px;color:var(--text-3);margin-top:2px;line-height:1.4}
+.viapill{display:inline-block;font-size:10px;padding:1px 8px;border-radius:99px;margin-top:4px;
+  background:var(--surface-3);color:var(--text-3);border:1px solid var(--border)}
+.icpb{display:inline-flex;align-items:center;font-size:10px;font-weight:700;padding:1.5px 8px;
+  border-radius:99px;margin-left:6px;letter-spacing:.01em;cursor:help;white-space:nowrap;
+  border:1px solid transparent;vertical-align:middle}
+.icpb.hi{background:var(--ok-soft);color:var(--ok-ink);border-color:var(--ok-line)}
+.icpb.mid{background:var(--warn-soft);color:var(--warn-ink);border-color:var(--warn-line)}
+.icpb.lo{background:var(--bad-soft);color:var(--bad-ink);border-color:var(--bad-line)}
+.intro{max-width:290px;font-size:12px;color:var(--text-3);line-height:1.5}
+
+/* Step strip */
+.steps{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.stp{font-size:10.5px;font-weight:660;padding:3px 9px;border-radius:99px;white-space:nowrap;
+  letter-spacing:.005em;border:1px solid transparent;line-height:1.5}
+.stp.done{background:var(--ok-soft);color:var(--ok-ink);border-color:var(--ok-line)}
+.stp.lock{background:var(--surface-3);color:var(--text-4);border-color:var(--border)}
+.stp.sched{background:var(--warn-soft);color:var(--warn-ink);border-color:var(--warn-line)}
+td .btn.sm{white-space:nowrap}
+.dontmail{color:var(--text-4);font-size:13px;cursor:pointer;background:none;border:0;padding:4px 6px;
+  border-radius:6px;line-height:1;transition:color var(--t-fast),background var(--t-fast)}
+.dontmail:hover{color:var(--bad);background:var(--bad-soft)}
+
+/* Pager */
+.pager{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;font-size:12.5px}
+.pager .pager-btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
+.pager a.disabled{pointer-events:none;opacity:.4}
+.pager-jump{display:inline-flex;gap:5px;align-items:center}
+.pager-jump input{width:62px;margin:0;padding:6px 8px}
+.pager select{width:auto;padding:6px 28px 6px 10px;margin:0;font-size:12px}
+
+@media(max-width:700px){
+  .ctlbar select{min-width:0;width:100%}
+  .leadfilters{margin-left:0;width:100%}
+  .leadfilters select{flex:1;min-width:0}
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-head">
   <div class="row">
@@ -10,10 +152,11 @@
   <p class="sub">Pull the top decision-makers per brand straight from Apollo, let AI write a personalized opener for each, then enroll.{% if active_mb %} Showing this mailbox's leads plus the shared verified pool available to enroll into it.{% else %} Bad syntax, dead domains and suppressed emails are filtered automatically; up to 5 execs are kept per brand.{% endif %}</p>
 </div>
 
+{# ── Flash messages ─────────────────────────────────────────────────── #}
 {% if import_result %}
   {% if import_result.error == 'no_email_column' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+  <div class="note-box bad flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     <span><strong>Couldn't import{% if import_result.filename %} {{import_result.filename}}{% endif %} — no <code>Email</code> column found.</strong><br>
       Your file's columns:
       {% for h in import_result.headers %}<code>{{h}}</code> {% else %}<span class="muted">(none detected — is it a valid CSV?)</span>{% endfor %}<br>
@@ -21,9 +164,9 @@
   </div>
   {% else %}
   {% set sk = import_result.skipped_invalid + import_result.skipped_suppressed + import_result.skipped_duplicate + import_result.skipped_domain_dupe %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">Imported {{import_result.imported}}{% if import_result.filename %} from {{import_result.filename}}{% endif %}.</strong>
+  <div class="note-box ok flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong>Imported {{import_result.imported}}{% if import_result.filename %} from {{import_result.filename}}{% endif %}.</strong>
       {{sk}} skipped ({{import_result.skipped_invalid}} invalid/no-email · {{import_result.skipped_duplicate}} duplicate · {{import_result.skipped_domain_dupe}} same company · {{import_result.skipped_suppressed}} suppressed).<br>
       <span style="display:inline-flex;gap:5px;flex-wrap:wrap;margin-top:6px;align-items:center">Columns detected:
       {% for f in import_result.detected_fields %}<span class="tag verified">{{ f.replace('_',' ')|title }}</span>{% endfor %}</span>
@@ -34,51 +177,51 @@
 
 {% if complete_result %}
   {% if complete_result.state == 'noapi' %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Can't complete details — no Apollo API key.</strong> Set <code>APOLLO_API_KEY</code> so the brand name and ICP score can be looked up (free — no reveal, no credits).</span>
+  <div class="note-box bad flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Can't complete details — no Apollo API key.</strong> Set <code>APOLLO_API_KEY</code> so the brand name and ICP score can be looked up (free — no reveal, no credits).</span>
   </div>
   {% elif complete_result.state == 'run' %}
-  <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+  <div class="note-box brand flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     <span><strong>Already completing details.</strong> A background run is in progress — let it finish. Progress shows in the <a href="/activity">Activity</a> feed; refresh to see the brand names and ICP scores fill in.</span>
   </div>
   {% else %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span>{% if complete_result.n %}<strong style="color:var(--ok)">Completing {{complete_result.n}} lead{{'' if complete_result.n==1 else 's'}} in the background</strong> — looking up each brand name and ICP score by domain (free Apollo lookup, no credits). Refresh in a moment to see the Company column and ICP badges fill in.{% else %}<strong style="color:var(--ok)">Nothing to complete</strong> — every lead already has a brand name and an ICP score.{% endif %}</span>
+  <div class="note-box ok flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <span>{% if complete_result.n %}<strong>Completing {{complete_result.n}} lead{{'' if complete_result.n==1 else 's'}} in the background</strong> — looking up each brand name and ICP score by domain (free Apollo lookup, no credits). Refresh in a moment to see the Company column and ICP badges fill in.{% else %}<strong>Nothing to complete</strong> — every lead already has a brand name and an ICP score.{% endif %}</span>
   </div>
   {% endif %}
 {% endif %}
 
 {% if rescore_result %}
   {% if rescore_result.state == 'run' %}
-  <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+  <div class="note-box brand flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     <span><strong>Already re-scoring.</strong> A background ICP re-score is in progress — let it finish, then refresh to see the leads re-rank by the new score.</span>
   </div>
   {% else %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span>{% if rescore_result.n %}<strong style="color:var(--ok)">Re-scoring {{rescore_result.n}} lead{{'' if rescore_result.n==1 else 's'}} in the background</strong> — re-ranking every lead on the rebuilt ICP (engineering / delivery / IT leaders — CxO and VP/Head/Director — climb; off-ICP industries and ICs sink; large enterprises no longer penalised). Free Apollo lookup, no credits. Refresh in a moment to see the ICP badges and order update.{% else %}<strong style="color:var(--ok)">No leads to re-score.</strong>{% endif %}</span>
+  <div class="note-box ok flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <span>{% if rescore_result.n %}<strong>Re-scoring {{rescore_result.n}} lead{{'' if rescore_result.n==1 else 's'}} in the background</strong> — re-ranking every lead on the rebuilt ICP (engineering / delivery / IT leaders — CxO and VP/Head/Director — climb; off-ICP industries and ICs sink; large enterprises no longer penalised). Free Apollo lookup, no credits. Refresh in a moment to see the ICP badges and order update.{% else %}<strong>No leads to re-score.</strong>{% endif %}</span>
   </div>
   {% endif %}
 {% endif %}
 
 {% if sent_result %}
   {% if sent_result.error %}
-  <div class="note-box" style="background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 35%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-    <span><strong style="color:var(--bad)">Sent-folder import failed.</strong>
+  <div class="note-box bad flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span><strong>Sent-folder import failed.</strong>
       {% if sent_result.error == 'no_mailbox' %}Pick a mailbox to scan.
       {% elif sent_result.error == 'bad_dates' %}Dates must be <code>YYYY-MM-DD</code>.
       {% elif sent_result.error == 'no_sequence' %}No active sequence with a follow-up to enroll into.
       {% else %}<code>{{sent_result.error}}</code> — check the mailbox's app password / IMAP access.{% endif %}</span>
   </div>
   {% else %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-bottom:22px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">Picked up {{sent_result.imported}} lead{{'' if sent_result.imported==1 else 's'}} from the Sent folder{% if sent_result.mailbox %} ({{sent_result.mailbox}}){% endif %}</strong> across {{sent_result.messages}} scanned message{{'' if sent_result.messages==1 else 's'}}.
+  <div class="note-box ok flash">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <span><strong>Picked up {{sent_result.imported}} lead{{'' if sent_result.imported==1 else 's'}} from the Sent folder{% if sent_result.mailbox %} ({{sent_result.mailbox}}){% endif %}</strong> across {{sent_result.messages}} scanned message{{'' if sent_result.messages==1 else 's'}}.
       Each has its opener marked as sent and <strong>follow-up 1 due {{sent_result.anchor.strftime('%a %d %b')}}</strong>, then the 3/7/12/16 working-day cadence.<br>
       <span class="muted" style="margin-top:4px;display:inline-block">Skipped: {{sent_result.skipped_duplicate}} already in your pipeline · {{sent_result.skipped_suppressed}} suppressed · {{sent_result.skipped_self}} your own address · {{sent_result.skipped_invalid}} unparseable.</span></span>
   </div>
@@ -87,15 +230,14 @@
 
 {% if pull_result %}
 {% set ok = pull_result.imported > 0 %}
-{% set tone = 'var(--ok)' if ok else 'var(--warn)' %}
-<div class="note-box" style="background:color-mix(in srgb,{{tone}} 12%,transparent);border-color:color-mix(in srgb,{{tone}} 30%,transparent);margin-bottom:22px">
-  <svg viewBox="0 0 24 24" fill="none" stroke="{{tone}}">{% if ok %}<path d="M20 6 9 17l-5-5"/>{% else %}<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>{% endif %}</svg>
-  <span><strong style="color:{{tone}}">Imported {{pull_result.imported}} into your pipeline · {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} used</strong>{% if pull_result.reveals %} — {{ (100 * pull_result.imported // pull_result.reveals) }}% of the reveals were a fit{% endif %}.
-  <br><span class="muted" style="font-size:12.5px;line-height:1.6">
+<div class="note-box {{ 'ok' if ok else '' }} flash">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">{% if ok %}<path d="M20 6 9 17l-5-5"/>{% else %}<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>{% endif %}</svg>
+  <span><strong>Imported {{pull_result.imported}} into your pipeline · {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} used</strong>{% if pull_result.reveals %} — {{ (100 * pull_result.imported // pull_result.reveals) }}% of the reveals were a fit{% endif %}.
+  <br><span class="muted" style="line-height:1.65">
     <strong>Where your {{pull_result.reveals}} credit{{'' if pull_result.reveals==1 else 's'}} went</strong> (1 credit = 1 reveal):
-    <strong style="color:var(--ok)">{{pull_result.imported}}</strong> became sendable leads ·
+    <strong style="color:var(--ok-ink)">{{pull_result.imported}}</strong> became sendable leads ·
     <strong>{{pull_result.discarded}}</strong> discarded (off-niche, below-bar, wrong HQ, or already yours — nothing is kept aside).
-    {% if pull_result.saved_pre %}<br><strong style="color:var(--ok)">✓ {{pull_result.saved_pre}} over-cap or stale-title contact{{'' if pull_result.saved_pre==1 else 's'}} skipped BEFORE revealing — those credits were saved</strong> (we cap execs-per-brand and drop former/advisory titles before paying).{% endif %}
+    {% if pull_result.saved_pre %}<br><strong style="color:var(--ok-ink)">✓ {{pull_result.saved_pre}} over-cap or stale-title contact{{'' if pull_result.saved_pre==1 else 's'}} skipped BEFORE revealing — those credits were saved</strong> (we cap execs-per-brand and drop former/advisory titles before paying).{% endif %}
     {% if pull_result.known %}<br>{{pull_result.known}} already-owned skipped free (0 credits — no re-reveal).{% endif %}
     <br>Asked for {{pull_result.target_total}} lead{{'' if pull_result.target_total==1 else 's'}}{% if pull_result.mode == 'companies' %} ({{ (pull_result.target_total / pull_result.per_brand) | round(0, 'ceil') | int }} brands × {{pull_result.per_brand}} roles){% else %} (max {{pull_result.per_brand}} per company){% endif %} · scanned {{pull_result.fetched}} contacts over {{pull_result.pages}} page{{'' if pull_result.pages==1 else 's'}}.
     {% if pull_result.imported < pull_result.target_total %}
@@ -117,10 +259,10 @@
   {% set f = send_feedback %}
   {% if f.kind == 'one' %}
     {% set ok = f.status == 'sent' %}
-    <div class="note-box" style="margin-bottom:22px;{% if ok %}background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent){% else %}background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 30%,transparent){% endif %}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="{{'var(--ok)' if ok else 'var(--warn)'}}"><path d="M20 6 9 17l-5-5"/></svg>
+    <div class="note-box {{ 'ok' if ok else '' }} flash">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
       <span>
-      {% if f.status == 'sent' %}<strong style="color:var(--ok)">Email sent.</strong>
+      {% if f.status == 'sent' %}<strong>Email sent.</strong>
       {% elif f.status == 'no_mailbox' %}Add and turn on a <a href="/mailboxes">mailbox</a> first — there's nothing to send from.
       {% elif f.status == 'no_sequence' %}There's no active email sequence to send.
       {% elif f.status == 'stopped' %}This person already replied, bounced, or opted out — sending is stopped for them.
@@ -133,36 +275,41 @@
       </span>
     </div>
   {% else %}
-    <div class="note-box" style="margin-bottom:22px;background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-      <span><strong style="color:var(--ok)">Sent {{f.sent}} × {{f.label}}.</strong>
+    <div class="note-box ok flash">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      <span><strong>Sent {{f.sent}} × {{f.label}}.</strong>
       {% set held = f.skipped + f.no_mailbox %}
       {% if held %}<br>{% if f.skipped %}{{f.skipped}} skipped (not at this step) · {% endif %}{% if f.no_mailbox %}{{f.no_mailbox}} had no mailbox{% endif %}.{% endif %}</span>
     </div>
   {% endif %}
 {% endif %}
 
-<div class="grid">
-  <div class="card">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Pull from Apollo</h2>
+{# ── Sources ────────────────────────────────────────────────────────── #}
+<h2>Add leads <span class="hint">source once, work them below</span></h2>
+<div class="src-grid">
+
+  <!-- Apollo -->
+  <div class="card src-card">
+    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Pull from Apollo</h2>
     <form method="post" id="apolloForm">
       <div>
-        <label>How much to pull <span class="muted">— pick what the number means; the running total is shown below</span></label>
+        <label style="margin-top:0">How much to pull <span class="muted">— pick what the number means; the running total is shown below</span></label>
         <div style="display:flex;gap:10px">
-          <input type="number" name="count" id="apCount" style="flex:0 0 110px" value="{{ preview_filters.count if preview_filters is defined else 20 }}" min="1" max="500">
+          <input type="number" name="count" id="apCount" style="flex:0 0 104px" value="{{ preview_filters.count if preview_filters is defined else 20 }}" min="1" max="500">
           <select name="mode" id="apMode" style="flex:1">
             <option value="companies" {{ 'selected' if (preview_filters is not defined or preview_filters.mode != 'leads') }}>brands (companies) × the POC roles ticked</option>
             <option value="leads" {{ 'selected' if (preview_filters is defined and preview_filters.mode == 'leads') }}>leads — exactly this many, total</option>
           </select>
         </div>
       </div>
+
       {# ---- POC roles: which decision-makers to pull ---- #}
       {% set selrole = preview_filters.roles.split(',') if (preview_filters is defined and preview_filters.roles) else [] %}
-      <label style="margin-top:12px">POC — roles to pull <span class="muted">(tick the buyers; none ticked = strongest default set across CxO + delivery leaders)</span></label>
+      <label>POC — roles to pull <span class="muted">(tick the buyers; none ticked = strongest default set across CxO + delivery leaders)</span></label>
       <div class="msel" id="roleMsel">
         <button type="button" class="msel-btn" id="roleBtn" aria-haspopup="listbox" aria-expanded="false">
           <span id="roleBtnLabel">Best-fit buyers (default)</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <div class="msel-panel" id="rolePanel" role="listbox" aria-multiselectable="true">
           {% set ns_role = namespace(group='') %}
@@ -173,13 +320,14 @@
         </div>
         <input type="hidden" name="roles" id="roleHidden" value="{{ preview_filters.roles if preview_filters is defined else '' }}">
       </div>
+
       {# ---- Sizing: headcount buckets ---- #}
       {% set selsize = preview_filters.sizes.split(',') if (preview_filters is defined and preview_filters.sizes) else [] %}
-      <label style="margin-top:12px">Company size <span class="muted">(headcount — none ticked = all buckets; large enterprises are in scope)</span></label>
+      <label>Company size <span class="muted">(headcount — none ticked = all buckets; large enterprises are in scope)</span></label>
       <div class="msel" id="sizeMsel">
         <button type="button" class="msel-btn" id="sizeBtn" aria-haspopup="listbox" aria-expanded="false">
           <span id="sizeBtnLabel">All sizes</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <div class="msel-panel" id="sizePanel" role="listbox" aria-multiselectable="true">
           {% for opt in size_options %}
@@ -188,13 +336,14 @@
         </div>
         <input type="hidden" name="sizes" id="sizeHidden" value="{{ preview_filters.sizes if preview_filters is defined else '' }}">
       </div>
+
       {# ---- Industry focus ---- #}
       {% set selind = preview_filters.industries.split(',') if (preview_filters is defined and preview_filters.industries) else [] %}
-      <label style="margin-top:12px">Industry focus <span class="muted">(pick one or more — drives the Apollo search <em>and</em> the ICP score)</span></label>
+      <label>Industry focus <span class="muted">(pick one or more — drives the Apollo search <em>and</em> the ICP score)</span></label>
       <div class="msel" id="indMsel">
         <button type="button" class="msel-btn" id="indBtn" aria-haspopup="listbox" aria-expanded="false">
           <span id="indBtnLabel">Choose industries…</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <div class="msel-panel" id="indPanel" role="listbox" aria-multiselectable="true">
           {% for opt in industry_options %}
@@ -203,13 +352,14 @@
         </div>
         <input type="hidden" name="industries" id="indHidden" value="{{ preview_filters.industries if preview_filters is defined else '' }}">
       </div>
+
       {# ---- Company HQ ---- #}
       {% set selhq = preview_filters.hqs.split(',') if (preview_filters is defined and preview_filters.hqs) else ['india'] %}
-      <label style="margin-top:12px">Company HQ <span class="muted">(headquarters — India is primary; add others to diversify)</span></label>
+      <label>Company HQ <span class="muted">(headquarters — India is primary; add others to diversify)</span></label>
       <div class="msel" id="hqMsel">
         <button type="button" class="msel-btn" id="hqBtn" aria-haspopup="listbox" aria-expanded="false">
           <span id="hqBtnLabel">Any HQ</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <div class="msel-panel" id="hqPanel" role="listbox" aria-multiselectable="true">
           {% for opt in hq_options %}
@@ -218,20 +368,21 @@
         </div>
         <input type="hidden" name="hqs" id="hqHidden" value="{{ preview_filters.hqs if preview_filters is defined else 'india' }}">
       </div>
-      <div class="note-box" style="background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent);margin-top:14px">
-        <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+
+      <div class="note-box brand" style="margin-top:14px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
         <span>Targets Efforti's real buyers — <strong>engineering / delivery / program / IT leaders</strong> (CxO <em>and</em> VP/Head/Director) at scaled tech, IT-services, GCC, BFSI &amp; engineering orgs. <strong>Verified emails only</strong>, exact titles. Every revealed contact is <strong>ICP-scored</strong> (industry fit · title tier · engineering-delivery signal · scale) and its <strong>real HQ is verified</strong> so Apollo's overseas leaks are dropped. Large enterprises are <strong>in scope</strong> — headcount is never a reject. Scope this pull: <strong id="apScope">20 brands × 5 roles = 100 leads</strong>. <strong>Preview is free</strong> — reveal on import costs ~1 credit each.</span>
       </div>
-      <div style="margin-top:16px;display:flex;gap:10px">
-        <button class="btn ghost" formaction="/leads/apollo_preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Preview</button>
-        <button class="btn" formaction="/leads/apollo_pull"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>Pull &amp; import</button>
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn ghost" formaction="/leads/apollo_preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Preview</button>
+        <button class="btn" formaction="/leads/apollo_pull"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Pull &amp; import</button>
       </div>
     </form>
     <script>
       (function(){
-        var b=document.getElementById('apCount'),
-            m=document.getElementById('apMode'),
-            s=document.getElementById('apScope');
+        var b = document.getElementById('apCount'),
+            m = document.getElementById('apMode'),
+            s = document.getElementById('apScope');
         // The ticked POC roles are the per-company cap. In 'brands' mode they
         // also MULTIPLY the number typed (22 brands x 3 roles = 66 leads); in
         // 'leads' mode the number IS the total. Either way the real total is
@@ -293,22 +444,24 @@
     </script>
   </div>
 
-  <div class="card">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>Import CSV</h2>
+  <!-- CSV -->
+  <div class="card src-card">
+    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>Import CSV</h2>
     <form method="post" action="/leads/import" enctype="multipart/form-data">
-      <label>CSV file <span class="muted">— required column: <code>Email</code></span></label>
+      <label style="margin-top:0">CSV file <span class="muted">— required column: <code>Email</code></span></label>
       <input type="file" name="file" accept=".csv" required>
-      <p class="muted" style="margin-top:5px;font-size:12px">The header row is checked on upload. Recommended columns for personalization: First Name, Company, Title, Website, Trigger.</p>
-      <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin-top:14px">
+      <p class="src-sub" style="margin-top:7px">The header row is checked on upload. Recommended columns for personalization: First Name, Company, Title, Website, Trigger.</p>
+      <label style="display:flex;align-items:center;gap:9px;font-weight:520;margin-top:14px">
         <input type="checkbox" name="mx_check" checked style="width:auto"> Verify domains (MX check) on import
       </label>
       <div style="margin-top:18px"><button class="btn ghost">Import leads</button></div>
     </form>
   </div>
 
-  <div class="card">
-    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>Pick up an already-sent batch</h2>
-    <p class="muted" style="margin-bottom:12px;font-size:12px;line-height:1.55">Emailed a batch <strong style="color:var(--text-2)">outside the app</strong>? Scan a mailbox's <strong style="color:var(--text-2)">Sent</strong> folder for the dates you sent it. Each recipient is added with its opener marked as already sent and <strong style="color:var(--text-2)">follow-up 1 scheduled for the cutover Monday</strong>, then the 3/7/12/16 working-day cadence. Nothing is sent now — you send the follow-up from the table below.</p>
+  <!-- Sent-folder pickup + maintenance -->
+  <div class="card src-card">
+    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>Pick up an already-sent batch</h2>
+    <p class="src-sub">Emailed a batch <strong style="color:var(--text-2)">outside the app</strong>? Scan a mailbox's <strong style="color:var(--text-2)">Sent</strong> folder for the dates you sent it. Each recipient is added with its opener marked as already sent and <strong style="color:var(--text-2)">follow-up 1 scheduled for the cutover Monday</strong>, then the 3/7/12/16 working-day cadence. Nothing is sent now — you send the follow-up from the table below.</p>
     <form method="post" action="/leads/import_sent">
       <label>Mailbox to scan</label>
       <select name="mailbox_id" required>
@@ -319,37 +472,43 @@
         <option value="" disabled>No mailboxes — add one first</option>
         {% endfor %}
       </select>
-      <div style="display:flex;gap:12px;margin-top:12px">
+      <div class="field-row" style="display:flex;gap:12px;margin-top:12px">
         <div style="flex:1"><label style="margin-top:0">Sent on/after</label>
           <input type="date" name="since" value="2026-07-23"></div>
         <div style="flex:1"><label style="margin-top:0">Up to (exclusive)</label>
           <input type="date" name="before" value="2026-07-25"></div>
       </div>
-      <p class="muted" style="margin-top:6px;font-size:12px">Default window covers Jul 23–24. The upper bound is exclusive.</p>
+      <p class="src-sub" style="margin-top:7px">Default window covers Jul 23–24. The upper bound is exclusive.</p>
       <div style="margin-top:16px"><button class="btn ghost">Scan Sent folder</button></div>
     </form>
-    <form method="post" action="/leads/complete" style="margin-top:14px;border-top:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding-top:14px">
-      <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Imported leads (and bare CSVs) arrive without a <strong style="color:var(--text-2)">brand name</strong> or an <strong style="color:var(--text-2)">ICP score</strong>. This fills both for every incomplete lead by looking each company up on Apollo <strong style="color:var(--text-2)">by domain</strong> — the free lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
-      <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>Complete brand names &amp; ICP scores</button>
-    </form>
-    <form method="post" action="/leads/rescore" style="margin-top:14px;border-top:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding-top:14px">
-      <p class="muted" style="font-size:12px;margin:0 0 10px;line-height:1.55">Re-score <strong style="color:var(--text-2)">every</strong> lead on the rebuilt ICP — <strong style="color:var(--text-2)">engineering / delivery / IT leaders</strong> (CxO <em>and</em> VP/Head/Director) at scaled tech / IT-services / GCC / BFSI / engineering orgs rank highest; off-ICP industries and individual contributors sink; <strong style="color:var(--text-2)">large enterprises are no longer penalised</strong>. Nothing is hidden or removed — leads only <strong style="color:var(--text-2)">re-rank</strong> by the new score. Free Apollo domain lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
-      <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18M7 12h10m-7 6h4"/></svg>Re-score ICP by POC title</button>
-    </form>
+
+    <div class="tool-block">
+      <form method="post" action="/leads/complete">
+        <p>Imported leads (and bare CSVs) arrive without a <strong style="color:var(--text-2)">brand name</strong> or an <strong style="color:var(--text-2)">ICP score</strong>. This fills both for every incomplete lead by looking each company up on Apollo <strong style="color:var(--text-2)">by domain</strong> — the free lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
+        <button class="btn ghost sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>Complete brand names &amp; ICP scores</button>
+      </form>
+    </div>
+    <div class="tool-block">
+      <form method="post" action="/leads/rescore">
+        <p>Re-score <strong style="color:var(--text-2)">every</strong> lead on the rebuilt ICP — <strong style="color:var(--text-2)">engineering / delivery / IT leaders</strong> (CxO <em>and</em> VP/Head/Director) at scaled tech / IT-services / GCC / BFSI / engineering orgs rank highest; off-ICP industries and individual contributors sink; <strong style="color:var(--text-2)">large enterprises are no longer penalised</strong>. Nothing is hidden or removed — leads only <strong style="color:var(--text-2)">re-rank</strong> by the new score. Free Apollo domain lookup, <strong style="color:var(--text-2)">no credits</strong>. Runs in the background.</p>
+        <button class="btn ghost sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M7 12h10m-7 6h4"/></svg>Re-score ICP by POC title</button>
+      </form>
+    </div>
   </div>
 </div>
 
+{# ── Apollo preview ─────────────────────────────────────────────────── #}
 {% if preview %}
-<h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Apollo preview <span class="hint">grouped by brand · no credits spent</span></h2>
+<h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Apollo preview <span class="hint">grouped by brand · no credits spent</span></h2>
 {% if preview.error %}
-<div class="note-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg><span>Apollo error: {{preview.error}}</span></div>
+<div class="note-box bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg><span>Apollo error: {{preview.error}}</span></div>
 {% else %}
 <div class="card" style="margin-bottom:16px">
-  <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
-    <div><span style="font-size:28px;font-weight:750">{{preview.contacts}}</span> <span class="muted">leads (of {{preview.want_total}} asked for)</span></div>
-    <div><span style="font-size:28px;font-weight:750">{{preview.brands_found}}</span> <span class="muted">brands</span></div>
-    <div><span style="font-size:28px;font-weight:750;color:var(--accent-ink)">{{preview.with_email}}</span> <span class="muted">have an email</span></div>
-    {% if preview.skipped_niche %}<div><span style="font-size:28px;font-weight:750">{{preview.skipped_niche}}</span> <span class="muted">off-niche dropped (free)</span></div>{% endif %}
+  <div class="pv-stats">
+    <div class="pv-stat"><div class="v">{{preview.contacts}}</div><div class="l">Leads · of {{preview.want_total}} asked</div></div>
+    <div class="pv-stat"><div class="v">{{preview.brands_found}}</div><div class="l">Brands</div></div>
+    <div class="pv-stat hot"><div class="v">{{preview.with_email}}</div><div class="l">Have an email</div></div>
+    {% if preview.skipped_niche %}<div class="pv-stat"><div class="v">{{preview.skipped_niche}}</div><div class="l">Off-niche dropped (free)</div></div>{% endif %}
     <form method="post" action="/leads/apollo_pull" style="margin-left:auto">
       <input type="hidden" name="industries" value="{{preview_filters.industries}}">
       <input type="hidden" name="roles" value="{{preview_filters.roles}}">
@@ -357,16 +516,16 @@
       <input type="hidden" name="hqs" value="{{preview_filters.hqs}}">
       <input type="hidden" name="count" value="{{preview_filters.count}}">
       <input type="hidden" name="mode" value="{{preview_filters.mode}}">
-      <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>Import these — reveal up to {{preview.with_email}} emails (~{{preview.with_email}} credits)</button>
+      <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Import these — reveal up to {{preview.with_email}} emails (~{{preview.with_email}} credits)</button>
     </form>
   </div>
 </div>
-<div class="tbl" style="margin-bottom:32px"><table>
+<div class="tbl tbl-scroll" style="margin-bottom:32px"><table>
   <thead><tr><th>Brand</th><th>Top execs found (name · role)</th><th>With email</th></tr></thead>
   <tbody>
   {% for brand in preview.brands %}
   <tr>
-    <td style="font-weight:600;vertical-align:top">{{brand.company}}</td>
+    <td style="font-weight:640;vertical-align:top">{{brand.company}}</td>
     <td>
       {% for p in brand.people %}
         <div style="padding:2px 0">{{p.first_name}} <span class="muted">· {{p.title}}</span>
@@ -381,95 +540,26 @@
 {% endif %}
 {% endif %}
 
-<style>
-.sendfrom{display:flex;align-items:center;gap:10px;margin:4px 0 12px;padding:11px 14px;
-  background:var(--surface);border:1px solid var(--border);border-radius:12px;flex-wrap:wrap;font-size:13px}
-.sendfrom label{display:flex;align-items:center;gap:7px;font-weight:600;margin:0}
-.sendfrom label svg{width:15px;height:15px;stroke:var(--accent)}
-.sendfrom select{min-width:230px;font-weight:600;padding:8px 30px 8px 11px}
-.ccbcc{margin:0 0 12px;padding:11px 14px;background:var(--surface);border:1px solid var(--border);
-  border-radius:12px}
-.ccbcc-fields{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:7px}
-.ccbcc-f{flex:1;min-width:220px}
-.ccbcc-f label{display:block;font-weight:600;font-size:12.5px;margin:0 0 4px}
-.ccbcc-f input{width:100%;padding:8px 11px}
-.seltools{display:flex;align-items:center;gap:10px;margin:6px 0 12px;font-size:13px;flex-wrap:wrap}
-.seltools input[type=number]{width:64px;padding:6px 8px}
-.seltools .selall{display:flex;align-items:center;gap:7px;font-weight:500}
-.leadfilters{display:flex;align-items:center;gap:14px;margin-left:auto;flex-wrap:wrap}
-.leadfilters .ff{display:flex;align-items:center;gap:7px;margin:0}
-.leadfilters .ff > span{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-3)}
-.leadfilters select{width:auto;min-width:152px;margin:0;padding:7px 30px 7px 11px;
-  font-size:12.5px;font-weight:600;background-position:right 10px center}
-.bulkbar{display:flex;align-items:center;gap:14px;padding:11px 15px;margin-bottom:14px;
-  background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
-  border-radius:12px;position:sticky;top:8px;z-index:5;flex-wrap:wrap}
-.bulkbar b{font-weight:700}
-.bulkbar .bb-btns{display:flex;gap:8px;flex-wrap:wrap}
-.steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.stp{font-size:11px;font-weight:600;padding:3px 8px;border-radius:99px;white-space:nowrap;letter-spacing:.01em}
-.stp.done{background:var(--ok-soft);color:var(--ok)}
-.stp.lock{background:var(--surface-3);color:var(--text-3)}
-.stp.sched{background:var(--warn-soft);color:var(--warn)}
-td .btn.sm{white-space:nowrap}
-.lcb{width:16px;height:16px;cursor:pointer;accent-color:var(--accent);margin:0;flex-shrink:0;vertical-align:middle}
-.contact-em{font-weight:600}
-.contact-sub{font-size:12px;color:var(--text-3)}
-.msel{position:relative}
-.msel-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
-  padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);
-  color:var(--text);font-size:13px;font-weight:600;cursor:pointer;text-align:left}
-.msel-btn:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--border))}
-.msel-btn svg{width:16px;height:16px;flex-shrink:0;transition:transform .15s}
-.msel.open .msel-btn{border-color:var(--accent)}
-.msel.open .msel-btn svg{transform:rotate(180deg)}
-.msel-btn #indBtnLabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.msel-btn .ph{color:var(--text-3);font-weight:500}
-.msel-panel{display:none;position:absolute;z-index:20;top:calc(100% + 4px);left:0;right:0;
-  max-height:260px;overflow-y:auto;padding:6px;background:var(--surface);
-  border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18)}
-.msel.open .msel-panel{display:block}
-.msel-opt{display:flex;align-items:center;gap:9px;margin:0;padding:8px 10px;border-radius:8px;
-  font-size:13px;font-weight:500;cursor:pointer}
-.msel-opt:hover{background:var(--surface-3)}
-.msel-opt input{width:16px;height:16px;margin:0;accent-color:var(--accent);cursor:pointer;flex-shrink:0}
-.msel-group{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
-  color:var(--text-3);padding:8px 10px 3px;margin-top:2px}
-.msel-group:first-child{margin-top:0}
-.icpb{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:99px;
-  margin-left:6px;letter-spacing:.02em;cursor:help;white-space:nowrap}
-.icpb.hi{background:var(--ok-soft);color:var(--ok)}
-.icpb.mid{background:var(--warn-soft);color:var(--warn)}
-.icpb.lo{background:var(--bad-soft);color:var(--bad)}
-.dontmail{color:var(--text-3);font-size:12px;cursor:pointer;background:none;border:0;padding:4px}
-.dontmail:hover{color:var(--bad)}
-.pager{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;font-size:12.5px}
-.pager .pager-btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
-.pager a.disabled{pointer-events:none;opacity:.4}
-.pager-jump{display:inline-flex;gap:4px;align-items:center}
-.pager-jump input{width:60px}
-.pager select{padding:4px 6px}
-</style>
-
-<h2 style="margin-bottom:2px">Your leads — pick who to email</h2>
-<p class="muted" style="font-size:12.5px;margin-bottom:10px">Sorted by <strong style="color:var(--text-2)">ICP fit, best first</strong> — hover a score badge to see why a company scored the way it did. Send the first email or the next follow-up to one person, or tick several and send the same email to all of them at once. Already-sent emails show a ✓ and can't be sent twice.</p>
+{# ── Working the pipeline ───────────────────────────────────────────── #}
+<h2 style="margin-bottom:4px">Your leads <span class="hint">pick who to email</span></h2>
+<p class="muted" style="margin-bottom:14px;line-height:1.6">Sorted by <strong style="color:var(--text-2)">ICP fit, best first</strong> — hover a score badge to see why a company scored the way it did. Send the first email or the next follow-up to one person, or tick several and send the same email to all of them at once. Already-sent emails show a ✓ and can't be sent twice.</p>
 
 {% set actives = mailboxes_all | selectattr('active') | list %}
-<div class="sendfrom">
-  <label for="senderMb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>Send from</label>
+<div class="ctlbar">
+  <label for="senderMb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>Send from</label>
   {% if actives %}
   <select id="senderMb">
     {% if actives|length > 1 %}<option value="">Spread across all ({{actives|length}} mailboxes)</option>{% endif %}
     {% for m in actives %}<option value="{{m.id}}"{{ ' selected' if active_mb and active_mb.id == m.id }}>{{m.email}}</option>{% endfor %}
   </select>
-  <span class="muted" style="font-size:11.5px">First emails go from here. Follow-ups always send from the mailbox that started the thread.</span>
+  <span class="why">First emails go from here. Follow-ups always send from the mailbox that started the thread.</span>
   {% else %}
-  <span class="muted">No active mailbox — <a href="/mailboxes">add one</a> to send.</span>
+  <span class="why">No active mailbox — <a href="/mailboxes">add one</a> to send.</span>
   {% endif %}
 </div>
 
-<div class="sendfrom">
-  <label for="mailerSel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M4 8h16M8 12h8M8 16h5"/></svg>Mailer</label>
+<div class="ctlbar">
+  <label for="mailerSel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M4 8h16M8 12h8M8 16h5"/></svg>Mailer</label>
   <select id="mailerSel">
     <option value="">Sequence default (first email)</option>
     {% for group_label, items in mailers %}
@@ -478,7 +568,7 @@ td .btn.sm{white-space:nowrap}
     </optgroup>
     {% endfor %}
   </select>
-  <span class="muted" style="font-size:11.5px">Which of the 8 first-touch variants to send — pick O&amp;M or Construction/EPC by angle. Applies to <strong>first emails only</strong>; follow-ups use the sequence copy.</span>
+  <span class="why">Which of the 8 first-touch variants to send — pick O&amp;M or Construction/EPC by angle. Applies to <strong>first emails only</strong>; follow-ups use the sequence copy.</span>
 </div>
 
 {% if actives %}
@@ -530,9 +620,13 @@ function setParam(k,v){var u=new URL(location.href);
   if(v===''||v===null){u.searchParams.delete(k);}else{u.searchParams.set(k,v);}
   u.searchParams.set('page','1');location.href=u.pathname+u.search;}
 </script>
+
 <div id="bulkBar" class="bulkbar" style="display:none">
-  <span><b id="bulkCount">0</b> selected</span>
-  <span class="muted" style="font-size:12px">Same email goes to everyone in a group — first emails and follow-ups stay separate:</span>
+  <span class="lead">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <b id="bulkCount">0</b> selected
+  </span>
+  <span class="why">Same email goes to everyone in a group — first emails and follow-ups stay separate:</span>
   <span class="bb-btns" id="bulkBtns"></span>
 </div>
 <form id="bulkForm" method="post" action="/leads/send_selected" style="display:none">
@@ -571,20 +665,27 @@ function setParam(k,v){var u=new URL(location.href);
 {% endmacro %}
 
 {{ pager() }}
-<div class="tbl"><table>
-  <thead><tr><th style="width:34px"></th><th>Contact</th><th>Company</th><th>Custom intro</th><th>Outreach</th><th style="width:36px"></th></tr></thead>
+<div class="tbl tbl-scroll"><table class="lead-tbl">
+  <thead><tr><th></th><th>Contact</th><th>Company</th><th>Custom intro</th><th>Outreach</th><th></th></tr></thead>
   <tbody>
   {% for l in leads %}
   {% set pr = progress[l.id] %}
   <tr>
     <td>{% if pr.state == 'ready' and pr.next is not none %}
       <input type="checkbox" class="lcb rowcb" value="{{l.id}}" data-step="{{pr.next}}">{% endif %}</td>
-    <td><div class="contact-em">{{l.email}}</div>
-      <div class="contact-sub">{{l.first_name}} {{l.last_name}}{% if l.title %} · {{l.title}}{% endif %}</div>
-      {% if not active_mb and pr.mailbox %}<div class="contact-sub" style="margin-top:3px"><span style="display:inline-block;font-size:10.5px;padding:1px 8px;border-radius:20px;background:var(--surface-2, rgba(127,127,127,.14));color:var(--text-2)">via {{pr.mailbox}}</span></div>{% endif %}</td>
+    <td>
+      <div class="who">
+        <span class="avatar">{{ (l.first_name or l.email)[:1] }}</span>
+        <span class="meta">
+          <span class="contact-em">{{l.email}}</span>
+          <div class="contact-sub">{{l.first_name}} {{l.last_name}}{% if l.title %} · {{l.title}}{% endif %}</div>
+          {% if not active_mb and pr.mailbox %}<span class="viapill">via {{pr.mailbox}}</span>{% endif %}
+        </span>
+      </div>
+    </td>
     <td>{{l.company}} <span class="muted">{{l.company_size}}</span>
       {% if l.icp_score is not none and l.icp_score >= 0 %}<span class="icpb {{'hi' if l.icp_score >= 70 else ('mid' if l.icp_score >= 55 else 'lo')}}" title="{{l.icp_reasons}}">ICP {{l.icp_score}}</span>{% endif %}</td>
-    <td class="muted" style="max-width:300px;font-size:12.5px">{{ (l.intro or l.trigger)|truncate(120) }}</td>
+    <td class="intro">{{ (l.intro or l.trigger)|truncate(120) }}</td>
     <td>
       {% if pr.state == 'ready' %}
         <div class="steps">
@@ -618,7 +719,7 @@ function setParam(k,v){var u=new URL(location.href);
   </tr>
   {% else %}
   <tr><td colspan="6"><div class="empty">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
     <p>No leads yet — pull from Apollo or import a CSV above.</p></div></td></tr>
   {% endfor %}
   </tbody>
@@ -700,14 +801,16 @@ function setParam(k,v){var u=new URL(location.href);
      refresh/close/navigate, so a send can never be silently orphaned in the
      background with the UI looking idle. -->
 <div id="sendOverlay" style="display:none;position:fixed;inset:0;z-index:9999;
-     background:rgba(6,10,16,.72);align-items:center;justify-content:center">
-  <div style="background:var(--card,#111826);border:1px solid color-mix(in srgb,var(--accent,#6ea8fe) 45%,transparent);
-       border-radius:14px;padding:26px 30px;max-width:400px;text-align:center;box-shadow:0 14px 46px rgba(0,0,0,.55)">
-    <div style="width:34px;height:34px;margin:0 auto 14px;border-radius:50%;
-         border:3px solid color-mix(in srgb,var(--accent,#6ea8fe) 28%,transparent);
-         border-top-color:var(--accent,#6ea8fe);animation:efspin .8s linear infinite"></div>
-    <div style="font-weight:700;font-size:15px;margin-bottom:6px" id="sendOverlayTitle">Sending emails…</div>
-    <div class="muted" style="font-size:12.5px;line-height:1.5">This takes a moment per email. <strong>Please don't refresh or close this tab</strong> until it finishes — the send is running right here.</div>
+     background:color-mix(in srgb,var(--text) 62%,transparent);backdrop-filter:blur(4px);
+     align-items:center;justify-content:center;padding:20px">
+  <div style="background:var(--surface);border:1px solid var(--border-2);border-radius:var(--r-lg);
+       padding:28px 32px;max-width:400px;text-align:center;box-shadow:var(--sh-4)">
+    <div style="width:34px;height:34px;margin:0 auto 16px;border-radius:50%;
+         border:3px solid color-mix(in srgb,var(--accent) 24%,transparent);
+         border-top-color:var(--accent);animation:efspin .8s linear infinite"></div>
+    <div style="font-weight:660;font-size:14.5px;margin-bottom:7px;letter-spacing:-.018em"
+         id="sendOverlayTitle">Sending emails…</div>
+    <div class="muted" style="line-height:1.55">This takes a moment per email. <strong style="color:var(--text-2)">Please don't refresh or close this tab</strong> until it finishes — the send is running right here.</div>
   </div>
 </div>
 <style>@keyframes efspin{to{transform:rotate(360deg)}}</style>

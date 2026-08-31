@@ -1,16 +1,62 @@
 {% extends "base.html" %}
 {% set active_nav = 'seq' %}
 {% block title %}Sequences{% endblock %}
+
+{% block head_extra %}
+<style>
+  .tokens{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+  .tokens code{font-size:11.5px}
+  .editor-head{display:flex;align-items:center;justify-content:space-between;gap:14px;
+    flex-wrap:wrap}
+  .editor-head select{width:auto;min-width:290px;max-width:100%;margin:0}
+  .step-card{margin-bottom:14px}
+  .step-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+  .step-badge{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:660;
+    padding:4px 11px;border-radius:99px;background:var(--accent-soft);color:var(--accent-ink);
+    border:1px solid var(--accent-line);letter-spacing:-.004em}
+  .step-badge .idx{display:grid;place-items:center;width:16px;height:16px;border-radius:99px;
+    background:var(--accent);color:#fff;font-size:9.5px;font-weight:700}
+  .wait{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-3)}
+  .wait input{width:60px;padding:5px 8px;text-align:center;font-weight:640}
+  .save-row{display:flex;align-items:center;gap:12px;margin-top:16px;padding-top:14px;
+    border-top:1px solid var(--border)}
+  .save-row .hintline{font-size:12px;color:var(--text-4)}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 18px;
+    font-size:12.5px;color:var(--text-2)}
+  .flow .node{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:99px;
+    background:var(--surface);border:1px solid var(--border);font-weight:560;box-shadow:var(--sh-1)}
+  .flow .node.first{background:var(--accent-soft);border-color:var(--accent-line);
+    color:var(--accent-ink);font-weight:640}
+  .flow .arw{color:var(--text-4)}
+  .flow .arw svg{width:13px;height:13px;stroke-width:2.4}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-head">
   <h1>Sequences</h1>
-  <p class="sub">Personalization variables: <code>{{'{{first_name}}'}}</code> <code>{{'{{company}}'}}</code> <code>{{'{{title}}'}}</code> <code>{{'{{opener}}'}}</code> <code>{{'{{trigger}}'}}</code>. A step with an <strong>empty subject</strong> replies “Re:” in the current thread; a step <strong>with a subject</strong> starts a fresh thread (a new subject line in the inbox).</p>
+  <p class="sub">The exact copy that goes out. A step with an <strong>empty subject</strong> replies “Re:” in the current thread; a step <strong>with a subject</strong> starts a fresh thread — a new subject line in the recipient's inbox.</p>
+  <div class="tokens">
+    <code>{{'{{first_name}}'}}</code> <code>{{'{{company}}'}}</code> <code>{{'{{title}}'}}</code>
+    <code>{{'{{opener}}'}}</code> <code>{{'{{trigger}}'}}</code>
+    <code>{{'{{n1}}'}}</code> <code>{{'{{n2}}'}}</code> <code>{{'{{n3}}'}}</code> <code>{{'{{peers}}'}}</code>
+  </div>
 </div>
 
+{% if mailer_saved %}
+<div class="note-box ok flash">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+  <span><strong>Mailer saved.</strong> This version is what will be sent from now on.</span>
+</div>
+{% endif %}
+
 <div class="card" style="margin-bottom:24px">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-    <h2 style="margin:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M4 8h16M8 12h8M8 16h5"/></svg>First-touch mailers <span class="muted" style="font-weight:400">— the 8 variants you pick from on the Leads page</span></h2>
-    <select id="mailerView" style="width:auto;min-width:300px;margin:0">
+  <div class="editor-head">
+    <h2 style="margin:0">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M4 8h16M8 12h8M8 16h5"/></svg>
+      First-touch mailers <span class="hint">— the 8 variants you pick from on the Leads page</span>
+    </h2>
+    <select id="mailerView" aria-label="Choose which first-touch mailer to edit">
       {% for group_label, items in mailers %}
       <optgroup label="{{group_label}}">
         {% for m in items %}<option value="{{m.slug}}"{{ ' selected' if selected_mailer == m.slug }}>{{group_label}} · {{m.label}}</option>{% endfor %}
@@ -18,80 +64,86 @@
       {% endfor %}
     </select>
   </div>
-  <p class="muted" style="font-size:12px;margin:10px 0 0">These are the cold first-emails. On the <a href="/leads">Leads</a> page, pick one in the <strong>Mailer</strong> selector to send it as the first touch — O&amp;M for O&amp;M leads, Construction/EPC for EPC leads. <strong>Edit any of them below and Save</strong> — the saved copy is exactly what gets sent. Each goes out with the recipient's first name in the subject, so every email is its own separate thread.</p>
-  {% if mailer_saved %}
-  <div class="note-box" style="background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 30%,transparent);margin-top:14px">
-    <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg>
-    <span><strong style="color:var(--ok)">Mailer saved.</strong> This version is what will be sent from now on.</span>
-  </div>
-  {% endif %}
+  <p class="muted" style="margin-top:10px;line-height:1.6">These are the cold first-emails. On the <a href="/leads">Leads</a> page, pick one in the <strong>Mailer</strong> selector to send it as the first touch — O&amp;M for O&amp;M leads, Construction/EPC for EPC leads. <strong>Edit any of them below and save</strong> — the saved copy is exactly what gets sent. Each goes out with the recipient's first name in the subject, so every email is its own separate thread.</p>
 
   {% for group_label, items in mailers %}
     {% for m in items %}
-    <form method="post" action="/sequences/mailer/{{m.slug}}" class="mailer-view" data-slug="{{m.slug}}" style="display:none;margin-top:16px">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-        <span class="tag verified" style="font-size:12px;padding:4px 11px">{{group_label}}</span>
+    <form method="post" action="/sequences/mailer/{{m.slug}}" class="mailer-view" data-slug="{{m.slug}}" style="display:none;margin-top:18px">
+      <div class="step-top">
+        <span class="step-badge">{{group_label}}</span>
         <span class="muted">{{m.label}}</span>
       </div>
-      <label style="margin-top:0">Subject <span class="muted">(sent as “{{'{{first_name}}'}}, &lt;your subject&gt;” — the first name keeps each email a separate thread)</span></label>
+      <label style="margin-top:10px">Subject
+        <span class="muted">(sent as “{{'{{first_name}}'}}, &lt;your subject&gt;” — the first name keeps each email a separate thread)</span></label>
       <input type="text" name="subject" value="{{m.subject}}">
-      <label>Body <span class="muted">(token: <code>{{'{{first_name}}'}}</code>)</span></label>
+      <label>Body
+        <span class="muted">(tokens: <code>{{'{{first_name}}'}}</code> <code>{{'{{company}}'}}</code> · peer brands <code>{{'{{n1}}'}}</code> <code>{{'{{n2}}'}}</code> <code>{{'{{n3}}'}}</code>, filled from the reader's own niche and never their own company)</span></label>
       <textarea name="body" rows="13">{{m.body}}</textarea>
-      <div style="margin-top:16px"><button class="btn sm">Save mailer</button></div>
+      <div class="save-row">
+        <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Save mailer</button>
+        <span class="hintline">Saved copy is sent verbatim from the next send onward.</span>
+      </div>
     </form>
     {% endfor %}
   {% endfor %}
 </div>
 <script>
   (function(){
-    var sel=document.getElementById('mailerView');
-    if(!sel)return;
-    var panels=Array.prototype.slice.call(document.querySelectorAll('.mailer-view'));
-    function show(){panels.forEach(function(p){
-      p.style.display=(p.getAttribute('data-slug')===sel.value)?'block':'none';});}
-    sel.addEventListener('change',show);show();
+    var sel = document.getElementById('mailerView');
+    if (!sel) return;
+    var panels = [].slice.call(document.querySelectorAll('.mailer-view'));
+    function show(){
+      panels.forEach(function(p){
+        p.style.display = (p.getAttribute('data-slug') === sel.value) ? 'block' : 'none';
+      });
+    }
+    sel.addEventListener('change', show); show();
   })();
 </script>
 
-<div class="card" style="margin-bottom:24px">
-  <h2 style="margin-top:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Follow-up cadence</h2>
-  <p class="muted" style="margin-bottom:4px">How many <strong style="color:var(--text)">working days</strong> (Mon–Fri) to wait before each follow-up. Weekends never count toward a gap and no email is ever sent on a Sat/Sun, so the sequence stays inside the week. This applies the same gap to every follow-up touch — currently <strong style="color:var(--text)">every {{cadence}} working days</strong>. The default sequence is spaced 3, 4, 5, 4 (touches on working days 3, 7, 12, 16); use this only to flatten it to a single gap.</p>
-  <form method="post" action="/sequences/followup_gap" style="display:flex;align-items:flex-end;gap:12px;margin-top:14px">
-    <div style="width:220px">
-      <label style="margin-top:0">Send follow-ups every</label>
-      <select name="days">
-        {% for d in [1,2,3,4,5,6,7] %}
-        <option value="{{d}}" {{'selected' if cadence==d}}>{{d}} working day{{'s' if d>1}}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <button class="btn">Apply cadence</button>
-  </form>
-  <p class="muted" style="margin-top:12px;font-size:12px">Example at every 3 working days: opener on day 0, follow-up 1 three weekdays later, follow-up 2 three weekdays after that — weekends skipped. You can still fine-tune any individual step's wait below.</p>
-</div>
-
 {% for seq in sequences %}
-<h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></svg>{{seq.name}}</h2>
-{% for step in seq.steps %}
-<div class="card" style="margin-bottom:16px">
+<h2>
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></svg>
+  {{seq.name}}
+</h2>
+{% set follow = seq.steps | selectattr('step_index', 'gt', 0) | list %}
+<div class="flow">
+  <span class="node first">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/></svg>
+    First touch — a mailer above
+  </span>
+  {% for step in follow %}
+  <span class="arw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+  <span class="node">Follow-up {{step.step_index}} <span class="muted">· +{{step.wait_days}}d</span></span>
+  {% endfor %}
+</div>
+<p class="muted" style="margin:-8px 0 16px;line-height:1.6">The <strong style="color:var(--text)">first touch</strong> is one of the 8 mailers above (or the neutral fallback) — edit it there. Below are the <strong style="color:var(--text)">{{ follow|length }} follow-up{{ '' if follow|length == 1 else 's' }}</strong>, each replying in the same thread. Waits are counted in <strong style="color:var(--text)">working days</strong> — weekends never count and nothing sends on a Sat/Sun.</p>
+
+{% for step in follow %}
+<div class="card step-card">
   <form method="post" action="/sequences/step/{{step.id}}">
-    <div style="display:flex;gap:12px;align-items:center;margin-bottom:6px">
-      <span class="tag verified" style="font-size:12px;padding:4px 11px">Step {{step.step_index + 1}}</span>
-      <span class="muted" style="display:flex;align-items:center;gap:6px">wait
-        <input type="number" name="wait_days" value="{{step.wait_days}}" min="0"
-               style="width:62px;padding:5px 8px;text-align:center"> working days
-        <span>{% if step.step_index == 0 %}— sends on enrollment{% else %}— weekdays after previous step{% endif %}</span>
+    <div class="step-top">
+      <span class="step-badge"><span class="idx">{{step.step_index}}</span>Follow-up {{step.step_index}}</span>
+      <span class="wait">wait
+        <input type="number" name="wait_days" value="{{step.wait_days}}" min="0">
+        working days after the previous step
       </span>
     </div>
-    <label>Subject {% if step.step_index > 0 %}<span class="muted">(leave empty to reply in-thread)</span>{% endif %}</label>
-    <input type="text" name="subject" value="{{step.subject}}">
+    <label>Subject <span class="muted">(leave empty to reply in-thread — recommended for follow-ups)</span></label>
+    <input type="text" name="subject" value="{{step.subject}}" placeholder="Leave empty to stay in the same thread">
     <label>Body</label>
     <textarea name="body" rows="9">{{step.body}}</textarea>
-    <div style="margin-top:16px"><button class="btn sm">Save step</button></div>
+    <div class="save-row">
+      <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Save step</button>
+      <span class="hintline">Applies to every send from now on — already-sent emails are untouched.</span>
+    </div>
   </form>
 </div>
 {% endfor %}
 {% else %}
-<div class="card"><div class="empty"><p>No sequences configured.</p></div></div>
+<div class="card"><div class="empty">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></svg>
+  <p>No sequences configured.</p>
+</div></div>
 {% endfor %}
 {% endblock %}

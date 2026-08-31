@@ -16,14 +16,21 @@ UI edits are preserved on a normal restart.
 
 Layout: each body is written like a real email — greeting on its own line, then
 ONE sentence per line, blank lines between blocks, and the agent link
-(agents.efforti.com) as the last line. Plain copy, no em-dashes. The only token is
-{{first_name}}; the stored `subject` is the BASE line and the recipient's first
-name is prepended at send time (SUBJECT_PREFIX) so every email is its own thread.
+(agents.efforti.com) as the last line. Plain copy, no em-dashes. The stored
+`subject` is the BASE line and the recipient's first name is prepended at send
+time (SUBJECT_PREFIX) so every email is its own thread.
+
+Tokens: {{first_name}}, {{company}}, and the peer-brand set {{n1}} {{n2}} {{n3}}
+(or {{peers}} for "A, B and C"). Every variant carries ONE social-proof block that
+names three brands from the READER'S OWN niche, never the reader's own company,
+picked stably per company so a preview and the real send always agree. The names
+and the pools live in app/peers.py. Keep that block to two lines: it is the
+competitive-pressure beat, not the pitch.
 """
 from .models import Mailer, get_metric, set_metric
 
 # Bump when the default copy below changes, to refresh the DB on next boot.
-MAILERS_VERSION = 4
+MAILERS_VERSION = 5
 
 # Prepended to every first-touch subject at send time so each recipient gets a
 # UNIQUE subject line (identical subjects collapse into one Gmail conversation).
@@ -47,6 +54,9 @@ Each site in-charge just replies to one message.
 Nothing to install, nothing to learn.
 Sites that go quiet get chased automatically, and you open a compiled report you can actually question ("why is that city slipping?") answered in your team's own words.
 
+You are in the same market as {{n1}}, {{n2}} and {{n3}}, and operators at that level have already started pulling their site updates this way instead of by phone.
+The teams running it get there in about two weeks: nearly every site reporting on time, and the updates themselves get sharper, because people write differently when they know the report will be read and questioned.
+
 Taking 5 founding pilots this month. Worth 20 minutes?
 
 """ + _PS,
@@ -64,6 +74,9 @@ Techs just reply to a message, no app.
 Silent sites get chased, and you get one report showing what's slipping before it becomes an SLA problem.
 You can question any line in it.
 
+{{n1}}, {{n2}} and {{n3}} are bidding for the same contracts you are, and the ones holding on to renewals are the ones who can answer that question on the call, not a day later.
+Operators at that level have already moved to something like this, and inside two weeks they are at near-full reporting compliance, with problems surfacing before the client raises them.
+
 5 founding pilots this month. Worth 20?
 
 """ + _PS,
@@ -78,6 +91,9 @@ They can't tell you why.
 
 Efforti collects every site's update by 9am from the people actually on the ground at {{company}} (one reply to a message, nothing to install), then hands you a report you can interrogate: "why is that site down this week?", answered in their own words, not a status colour.
 Quiet sites get chased for you.
+
+This is the part {{n1}}, {{n2}} and {{n3}} are all moving toward, because a status colour does not survive a client review.
+The teams already on it say the quality of the updates themselves goes up within a fortnight: a report that gets questioned is a report people write properly.
 
 Running 5 founding pilots this month: 30 days, one region, we handle the chasing.
 Worth 20 minutes?
@@ -96,6 +112,9 @@ Each site in-charge at {{company}} just replies to one message, the same way the
 No app, no login, no training.
 Silent sites get chased automatically.
 
+Operators like {{n1}}, {{n2}} and {{n3}} are moving on this now for exactly that reason: the version with nothing to adopt is the one that survives contact with a field team.
+Two weeks in, reporting compliance sits near full and the evening chasing calls mostly stop.
+
 5 founding pilots this month. Worth 20 minutes to see it?
 
 """ + _PS,
@@ -111,6 +130,9 @@ When a site stalls waiting on material or manpower, do you know by lunch, or aft
 Efforti collects every site's DPR by 9am.
 Each engineer at {{company}} just replies to a message, no app, no forms.
 Sites that go quiet get chased, and your PMO sees which sites are behind and why, in the site's own words.
+
+{{n1}}, {{n2}} and {{n3}} are chasing the same tenders, and on a stalled site the gap between knowing by lunch and knowing on Thursday is the whole margin.
+Contractors at that level have already started reporting this way, and inside two weeks they are at near-full DPR compliance with stalls showing up the same day.
 
 5 founding pilots this month: 30 days, one cluster, we run the chasing.
 Worth 20 minutes?
@@ -128,6 +150,9 @@ Efforti chases them for you.
 Every engineer replies to one message; by 9am you have a compiled DPR across every site, nothing to install, no format to enforce, and missing sites get flagged and chased automatically.
 And you can question any of it: "why is that site behind?"
 
+Contractors at the level of {{n1}}, {{n2}} and {{n3}} have already stopped having the office chase DPRs by hand.
+Two weeks in, the DPRs arrive on their own and they are better written, because the engineer knows the report gets read and questioned.
+
 Taking 5 founding pilots this month. Worth 20?
 
 """ + _PS,
@@ -144,6 +169,9 @@ Engineers just reply to a message, no app.
 Silent sites get chased for you, and the report tells you not just what's behind but why, in the engineer's own words.
 You can drill into any line.
 
+When you are up against {{n1}}, {{n2}} and {{n3}}, a PMO that sees a slip on day one and a PMO that sees it on day five are not running the same business.
+Clusters already reporting this way get every site in by 9am within a fortnight, with the reasons attached, not just the numbers.
+
 5 founding pilots this month, one cluster each. Worth 20 minutes?
 
 """ + _PS,
@@ -158,6 +186,9 @@ The evening "figure batao" calls: someone rings each site, notes it down, rolls 
 Efforti turns that into a 9am compiled report.
 Engineers at {{company}} just reply to one message, no app for the field, no forms.
 Sites that stay quiet get chased automatically, and you can question the report line by line.
+
+{{n1}}, {{n2}} and {{n3}} are solving this exact problem right now, and whoever solves it first stops losing two evenings a week to it.
+The calls go away inside a fortnight, and the written updates end up sharper than anything the calls ever produced.
 
 5 founding pilots this month: 30 days, one cluster, we do the chasing.
 Worth 20 minutes?
@@ -229,6 +260,14 @@ def mailer_content(db, slug):
     if not m:
         return None
     return (SUBJECT_PREFIX + (m.subject or ""), m.body)
+
+
+def mailer_niche(db, slug) -> str:
+    """The vertical a variant is written for ("onm" / "epc"), or "" for an unknown
+    slug. Used as the fallback signal for the peer-brand tokens when a lead's own
+    industry is blank (see app/peers.py)."""
+    m = get_mailer(db, slug)
+    return (m.niche or "") if m else ""
 
 
 def mailers_grouped(db):

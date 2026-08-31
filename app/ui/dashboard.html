@@ -1,48 +1,92 @@
 {% extends "base.html" %}
 {% set active_nav = 'dash' %}
 {% block title %}Dashboard{% endblock %}
+
+{% block head_extra %}
+<style>
+  /* Dashboard-only refinements */
+  .dash-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;
+    flex-wrap:wrap;margin-bottom:26px}
+  .dash-head .txt{min-width:0;flex:1 1 420px}
+  /* Stage-to-stage carry-through, shown under each stage label. */
+  .funnel .fdrop{display:inline-flex;align-items:center;gap:4px;margin-top:8px;
+    font-size:10px;font-weight:680;letter-spacing:.02em;padding:2px 8px;border-radius:99px;
+    background:var(--surface-3);color:var(--text-3);border:1px solid var(--border);
+    font-variant-numeric:tabular-nums}
+  .funnel .fdrop svg{width:10px;height:10px;stroke-width:2.6}
+  .metric-card{display:flex;align-items:flex-end;gap:20px;flex-wrap:wrap;margin-top:16px}
+  .metric-card .lede{flex:1 1 260px;min-width:0}
+  .metric-card .lede .t{font-weight:640;display:flex;align-items:center;gap:8px;
+    font-size:13.5px;letter-spacing:-.014em}
+  .metric-card .lede .t svg{width:15px;height:15px;stroke-width:2;color:var(--text-3)}
+  .metric-form{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+  .metric-form label{margin:0 0 6px}
+  .metric-form input{width:118px}
+  .act-feed td:first-child{width:158px;white-space:nowrap}
+  .act-feed td:nth-child(2){width:104px}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="page-head">
-  <div class="row">
-    <h1>Dashboard</h1>
-    {% if active_mb %}<span class="scope-pill">Sending as {{active_mb.email}}</span>{% endif %}
+<div class="dash-head">
+  <div class="txt">
+    <div class="row" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:7px">
+      <h1 style="margin:0">Dashboard</h1>
+      {% if active_mb %}<span class="scope-pill">Sending as {{active_mb.email}}</span>{% endif %}
+    </div>
+    <p class="sub">{% if active_mb %}This mailbox's book of business — leads extracted, contacted, demos and conversions.{% else %}All mailboxes combined. Extract → contact → demo → convert — conversions are what count, everything before is a leading indicator.{% endif %}</p>
   </div>
-  <p class="sub">{% if active_mb %}This mailbox's book of business — leads extracted, contacted, demos and conversions.{% else %}All mailboxes combined. Extract → contact → demo → convert — conversions are what count, everything before is a leading indicator.{% endif %}</p>
+  <div class="btn-row">
+    <form class="inline" method="post" action="/run/poll">
+      <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.6"/><path d="M21 3v6h-6"/></svg>Check replies</button>
+    </form>
+    <a href="/leads" class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Work the pipeline</a>
+  </div>
 </div>
 
-{% if polled %}<div class="note-box" style="margin-bottom:20px"><svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg><span>Checked all mailboxes for replies and bounces.</span></div>{% endif %}
-{% if saved %}<div class="note-box" style="margin-bottom:20px;background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 25%,transparent)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)"><path d="M20 6 9 17l-5-5"/></svg><span>Saved your demo &amp; converted figures.</span></div>{% endif %}
+{% if polled %}
+<div class="note-box ok flash">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+  <span>Checked all mailboxes for replies and bounces.</span>
+</div>
+{% endif %}
+{% if saved %}
+<div class="note-box ok flash">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+  <span>Saved your demo &amp; converted figures.</span>
+</div>
+{% endif %}
 
-<!-- Stat tiles — mirror the four funnel stages, in order -->
+<!-- Stat tiles — mirror the five funnel stages, in order -->
 <div class="tiles">
   <div class="tile">
-    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>Leads</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>Leads</div>
     <div class="num">{{funnel.leads}}</div>
     <div class="note">extracted &amp; verified</div>
   </div>
   <div class="tile">
-    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Contacted</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Contacted</div>
     <div class="num">{{funnel.contacted}}</div>
     <div class="note">{{sent_total}} emails sent</div>
   </div>
   <div class="tile">
-    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>Replied</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Replied</div>
     <div class="num">{{funnel.replied}}</div>
-    <div class="note">real inbox replies</div>
+    <div class="note">{{funnel.reply_rate}}% of contacted</div>
   </div>
   <div class="tile">
-    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Demo</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Demo</div>
     <div class="num">{{funnel.demo}}</div>
     <div class="note">demos booked</div>
   </div>
   <div class="tile accent">
-    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6 9 17l-5-5"/></svg>Converted</div>
+    <div class="tl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Converted</div>
     <div class="num">{{funnel.converted}}</div>
     <div class="note">customers won</div>
   </div>
 </div>
 
-<!-- Funnel: extract → contact → demo → convert -->
+<!-- Funnel: extract → contact → reply → demo → convert -->
 <h2>Conversion funnel <span class="hint">extract → contact → reply → demo → convert</span></h2>
 <div class="funnel">
   {% set stages = [('Leads', funnel.leads), ('Contacted', funnel.contacted),
@@ -53,6 +97,14 @@
   <div class="fstage">
     <div class="fnum">{{val}}</div>
     <div class="flabel">{{name}}</div>
+    {% if not loop.last %}
+      {% set nxt = stages[loop.index][1] %}
+      <div><span class="fdrop" title="{{ (nxt / val * 100)|round(1) if val else 0 }}% of {{name}} reach {{stages[loop.index][0]}}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        {{ (nxt / val * 100)|round|int if val else 0 }}%</span></div>
+    {% else %}
+      <div><span class="fdrop" style="visibility:hidden">—</span></div>
+    {% endif %}
     <div class="fbar"><span style="width:{{ (val / top * 100) if top else 0 }}%"></span></div>
   </div>
   {% endfor %}
@@ -64,58 +116,66 @@
 </div>
 
 <!-- Demo & Converted have no live source — entered by hand, kept privately. -->
-<div class="card" style="margin-top:16px;display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap">
-  <div style="flex:1;min-width:220px">
-    <div style="font-weight:650;display:flex;align-items:center;gap:7px">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:16px;height:16px;stroke-width:2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+<div class="card metric-card">
+  <div class="lede">
+    <div class="t">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       Demo &amp; converted — {% if active_mb %}{{active_mb.email}}{% else %}all mailboxes{% endif %}
     </div>
-    <div class="muted" style="font-size:12.5px;margin-top:3px">Not tracked automatically — enter these from your own records. {% if active_mb %}Saved for this mailbox.{% else %}This is the <strong>combined total across all mailboxes</strong> — edit it here, or switch to a mailbox above to record a single mailbox's figures.{% endif %}</div>
+    <div class="muted" style="margin-top:4px;line-height:1.55">Not tracked automatically — enter these from your own records. {% if active_mb %}Saved for this mailbox.{% else %}This is the <strong>combined total across all mailboxes</strong> — edit it here, or switch mailbox in the top bar to record a single mailbox's figures.{% endif %}</div>
   </div>
-  <form method="post" action="/metrics" style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">
+  <form method="post" action="/metrics" class="metric-form">
     <div>
-      <label style="margin:0 0 6px">Demos booked</label>
-      <input type="number" name="demo" min="0" value="{{funnel.demo}}" style="width:120px">
+      <label>Demos booked</label>
+      <input type="number" name="demo" min="0" value="{{funnel.demo}}">
     </div>
     <div>
-      <label style="margin:0 0 6px">Converted</label>
-      <input type="number" name="converted" min="0" value="{{funnel.converted}}" style="width:120px">
+      <label>Converted</label>
+      <input type="number" name="converted" min="0" value="{{funnel.converted}}">
     </div>
-    <button class="btn" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6 9 17l-5-5"/></svg>Save</button>
+    <button class="btn" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Save</button>
   </form>
 </div>
 
-<h2>Mailbox health</h2>
+<div class="sec-head">
+  <h2>Mailbox health <span class="hint">keep 7-day bounce under 3%</span></h2>
+  <a href="/mailboxes" class="btn ghost sm">Manage mailboxes</a>
+</div>
 {% if mailboxes %}
-<div class="tbl"><table>
+<div class="tbl tbl-scroll"><table>
   <thead><tr><th>Mailbox</th><th>Status</th><th>Sent today</th><th>7-day bounce</th></tr></thead>
   <tbody>
   {% for m in mailboxes %}
   <tr>
-    <td>{{m.email}}</td>
+    <td><strong>{{m.email}}</strong>{% if m.display_name %}<div class="sub-line">{{m.display_name}}</div>{% endif %}</td>
     <td>{% if m.active %}<span class="tag active">active</span>
         {% else %}<span class="tag paused">paused</span>{% if m.paused_reason %}<div class="sub-line">{{m.paused_reason}}</div>{% endif %}{% endif %}</td>
     <td class="mono">{{ sent_today_map.get(m.email, 0) }}</td>
-    <td class="mono" style="{{'color:var(--bad);font-weight:600' if m.bounce_rate() > 0.03}}">{{'%.1f'|format(m.bounce_rate()*100)}}%</td>
+    <td class="mono" style="{{'color:var(--bad);font-weight:660' if m.bounce_rate() > 0.03}}">{{'%.1f'|format(m.bounce_rate()*100)}}%</td>
   </tr>
   {% endfor %}
   </tbody>
 </table></div>
 {% else %}
 <div class="card"><div class="empty">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>
-  <p>No mailboxes yet. <a href="/mailboxes">Add your first sending mailbox</a> — use a lookalike domain, never your product domain.</p>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="m22 7-10 5L2 7"/></svg>
+  <p><strong>No mailboxes yet.</strong><br><a href="/mailboxes">Add your first sending mailbox</a> — use a lookalike domain, never your product domain.</p>
 </div></div>
 {% endif %}
 
-<h2>Recent activity</h2>
-<div class="tbl"><table><tbody>
+<div class="sec-head">
+  <h2>Recent activity</h2>
+  <a href="/activity" class="btn ghost sm">Full audit trail</a>
+</div>
+<div class="tbl tbl-scroll"><table class="act-feed"><tbody>
   {% for e in recent %}
-  <tr><td class="muted mono" style="width:150px">{{e.created_at.strftime('%d %b · %H:%M')}}</td>
-      <td style="width:96px"><span class="tag {{e.kind}}">{{e.kind}}</span></td>
+  <tr><td class="muted mono">{{e.created_at.strftime('%d %b · %H:%M')}}</td>
+      <td><span class="tag {{e.kind}}">{{e.kind}}</span></td>
       <td>{{e.detail}}</td></tr>
   {% else %}
-  <tr><td class="empty">Nothing yet — pull some leads to get started.</td></tr>
+  <tr><td><div class="empty">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    <p>Nothing yet — pull some leads to get started.</p></div></td></tr>
   {% endfor %}
 </tbody></table></div>
 {% endblock %}
