@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <title>Efforti Outreach · Your growth engineer</title>
 <meta name="description" content="Efforti Outreach is the growth engine behind Efforti — it sources the right decision-makers, writes the opener, sends from your own mailboxes and tells you exactly what worked.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235D4DF0'/%3E%3Cpath d='M10 9h12v3.4h-8.3v3.1h7.5v3.3h-7.5v3.8H22V26H10z' fill='white'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2029.93%2029.91%27%20fill%3D%27%230F9CD8%27%20fill-rule%3D%27evenodd%27%3E%3Cpath%20d%3D%27M10.47%200.41L8.47%201.17L5.47%203.06L3.14%205.45L1.33%208.45L0.08%2012.45L0.0%2016.45L0.28%2018.45L1.37%2021.45L1.92%2022.45L3.19%2024.45L5.47%2026.78L8.47%2028.67L11.47%2029.75L16.47%2029.91L17.03%2029.45L17.03%2028.45L17.02%2019.45L16.82%2018.45L16.47%2017.88L15.47%2017.82L14.47%2018.24L14.39%2018.45L14.16%2019.45L14.09%2026.45L13.47%2026.98L12.47%2026.94L9.47%2025.89L6.47%2023.71L4.09%2020.45L3.38%2018.45L3.35%2017.45L4.47%2017.2L28.47%2017.2L29.47%2017.06L29.93%2016.45L29.85%2012.45L29.32%2011.45L28.96%209.45L27.98%207.45L27.17%206.45L26.76%205.45L24.47%203.15L22.47%201.84L21.47%201.22L19.47%200.45L17.47%200.01L12.47%200.0L10.47%200.41Z%20M11.47%203.17L10.47%203.71L9.47%203.98L7.47%205.27L5.35%207.45L4.06%209.45L3.03%2012.45L2.97%2013.45L3.17%2014.45L3.47%2014.71L25.47%2014.75L26.47%2014.66L26.71%2014.45L26.9%2013.45L26.85%2012.45L26.01%2010.45L25.79%209.45L23.64%206.45L22.47%205.4L20.47%204.02L17.47%202.94L14.47%202.8L11.47%203.17Z%20M14.47%2010.03L14.05%2010.45L13.77%2011.45L13.87%2012.45L14.47%2013.22L15.47%2014.03L16.47%2013.91L17.62%2012.45L17.82%2011.45L17.14%2010.45L16.47%209.88L15.47%209.72L14.47%2010.03Z%27%2F%3E%3C%2Fsvg%3E">
 <script>
   (function(){
     var t = localStorage.getItem('theme') || 'system';
@@ -25,9 +25,11 @@
   --veil:rgba(255,255,255,.72);
   --border:#E5E7EF; --border-2:#D6DAE5; --border-3:#C2C8D6;
   --text:#0D1020; --text-2:#4E566B; --text-3:#848CA0; --text-4:#A8AEC0;
-  --accent:#5D4DF0; --accent-h:#4E3EE4; --accent-ink:#4A3AD9;
-  --accent-soft:#EEECFE; --accent-line:#CFC8FA;
-  --grad-1:#6D5AF7; --grad-2:#A07CFA; --grad-3:#3DAEF8; --grad-4:#28D3C2;
+  --brand:#0F9CD8;
+  --accent:#0A76A8; --accent-h:#0A6892; --accent-ink:#0A6892;
+  --accent-soft:#E6F4FB; --accent-line:#B3DDF1; --on-accent:#FFFFFF;
+  --grad-1:#0F9CD8; --grad-2:#4FC3F7; --grad-3:#14C7C1; --grad-4:#0A76A8;
+  --accent-grad-end:#0A8189;
   --ok:#0E9E6C; --ok-ink:#0A7A53; --ok-soft:#DEF5EB; --ok-line:#A9E3CD;
   --warn:#C2740A; --warn-soft:#FCF0DC; --warn-line:#F0D5A4;
   --sh-1:0 1px 1px rgba(13,16,32,.04), 0 1px 2px rgba(13,16,32,.05);
@@ -47,9 +49,11 @@
   --veil:rgba(12,14,21,.72);
   --border:#232733; --border-2:#2F3442; --border-3:#3C4252;
   --text:#EDEFF5; --text-2:#9CA4B8; --text-3:#6B7387; --text-4:#525A6E;
-  --accent:#7C6BFF; --accent-h:#8D7DFF; --accent-ink:#A79AFF;
-  --accent-soft:#1B1836; --accent-line:#3A3268;
-  --grad-1:#7C6BFF; --grad-2:#A78BFA; --grad-3:#3DAEF8; --grad-4:#28D3C2;
+  --brand:#0F9CD8;
+  --accent:#42B8EA; --accent-h:#5CC5EE; --accent-ink:#7FCFF0;
+  --accent-soft:#08252F; --accent-line:#15455A; --on-accent:#04222E;
+  --grad-1:#3FB6E8; --grad-2:#4FC3F7; --grad-3:#14C7C1; --grad-4:#0F9CD8;
+  --accent-grad-end:#4FC3F7;
   --ok:#2FCF98; --ok-ink:#5FE0B4; --ok-soft:#0E2A21; --ok-line:#1D4C3B;
   --warn:#E9A13B; --warn-soft:#2B1F0E; --warn-line:#4D3818;
   --sh-1:0 1px 2px rgba(0,0,0,.4);
@@ -100,16 +104,12 @@ strong{font-weight:640}
   border-bottom:1px solid transparent;transition:border-color .25s,box-shadow .25s}
 .nav.stuck{border-bottom-color:var(--border);box-shadow:var(--sh-1)}
 .nav-in{display:flex;align-items:center;gap:14px;height:64px}
-.logo{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:-.03em;font-size:16px}
-.logo .mark{width:32px;height:32px;border-radius:9px;flex:none;position:relative;overflow:hidden;
-  background:linear-gradient(140deg,var(--grad-1) 0%,var(--grad-2) 55%,var(--grad-3) 130%);
-  display:grid;place-items:center;color:#fff;font-weight:800;font-size:15px;
-  box-shadow:0 4px 14px -4px color-mix(in srgb,var(--grad-1) 70%,transparent),
-             inset 0 1px 0 rgba(255,255,255,.34)}
-.logo .mark::after{content:"";position:absolute;inset:0;
-  background:linear-gradient(160deg,rgba(255,255,255,.34),transparent 55%)}
-.logo small{display:block;font-size:9px;font-weight:560;letter-spacing:.14em;
-  text-transform:uppercase;color:var(--text-3);margin-top:1px}
+/* Real Efforti logo — vectorised from the brand artwork, no plate behind it. */
+.logo{display:flex;align-items:center;gap:9px}
+.logo svg{color:var(--brand);height:24px;width:auto;flex:none;display:block}
+.logo .sfx{font-size:10px;font-weight:680;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--text-3);padding-left:9px;border-left:1px solid var(--border-2);
+  line-height:1.1;white-space:nowrap}
 .nav-links{display:flex;align-items:center;gap:4px;margin-left:22px}
 .nav-links a{padding:7px 12px;border-radius:8px;font-size:13.5px;font-weight:520;color:var(--text-2);
   transition:background .14s,color .14s}
@@ -120,7 +120,7 @@ strong{font-weight:640}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
   padding:10px 18px;border-radius:10px;border:1px solid transparent;
   font:inherit;font-size:13.5px;font-weight:620;letter-spacing:-.01em;cursor:pointer;
-  background:var(--accent);color:#fff;white-space:nowrap;
+  background:var(--accent);color:var(--on-accent);white-space:nowrap;
   box-shadow:0 1px 2px rgba(13,16,32,.16),inset 0 1px 0 rgba(255,255,255,.18);
   transition:background .14s,box-shadow .16s,transform .08s}
 .btn:hover{background:var(--accent-h);box-shadow:var(--glow)}
@@ -213,9 +213,9 @@ h1 .grad{background:linear-gradient(100deg,var(--grad-1) 6%,var(--grad-2) 44%,va
 .pv-tile .t{font-size:8.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-4)}
 .pv-tile .v{font-size:21px;font-weight:700;letter-spacing:-.035em;margin-top:6px;
   font-variant-numeric:tabular-nums}
-.pv-tile.hot{border-color:transparent;color:#fff;
-  background:linear-gradient(145deg,var(--accent),var(--grad-2) 130%)}
-.pv-tile.hot .t{color:rgba(255,255,255,.82)}
+.pv-tile.hot{border-color:transparent;color:var(--on-accent);
+  background:linear-gradient(145deg,var(--accent),var(--accent-grad-end) 130%)}
+.pv-tile.hot .t{color:color-mix(in srgb,var(--on-accent) 80%,transparent)}
 .pv-funnel{display:flex;border:1px solid var(--border);border-radius:12px;overflow:hidden;
   background:var(--surface)}
 .pv-fs{flex:1;padding:13px 8px 0;text-align:center}
@@ -292,7 +292,8 @@ h2{font-size:clamp(27px,3.7vw,40px);line-height:1.14;font-weight:700;letter-spac
 .step:hover .n{transform:translateY(-3px);box-shadow:var(--sh-3);border-color:var(--accent-line)}
 .step .n svg{width:21px;height:21px;stroke-width:1.9}
 .step .n b{position:absolute;top:-7px;right:-7px;width:21px;height:21px;border-radius:99px;
-  background:var(--accent);color:#fff;font-size:10.5px;font-weight:700;display:grid;place-items:center;
+  background:var(--accent);color:var(--on-accent);font-size:10.5px;font-weight:700;
+  display:grid;place-items:center;
   box-shadow:var(--glow)}
 .step h3{font-size:15.5px;font-weight:660;letter-spacing:-.02em;margin-bottom:7px}
 .step p{font-size:13.5px;line-height:1.6;color:var(--text-2);max-width:30ch;margin-inline:auto}
@@ -361,7 +362,7 @@ h2{font-size:clamp(27px,3.7vw,40px);line-height:1.14;font-weight:700;letter-spac
 /* ── Callout / final CTA ───────────────────────────────────────────────── */
 .cta{position:relative;border-radius:var(--r-2xl);overflow:hidden;text-align:center;
   padding:clamp(44px,6vw,72px) clamp(24px,5vw,56px);
-  background:linear-gradient(135deg,var(--grad-1) 0%,#7B5BF5 42%,var(--grad-3) 130%);
+  background:linear-gradient(135deg,#06506F 0%,#0A76A8 46%,#0B7AAC 130%);
   box-shadow:var(--sh-4);color:#fff}
 .cta::before{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(70% 90% at 15% 0%,rgba(255,255,255,.26),transparent 62%)}
@@ -372,19 +373,19 @@ h2{font-size:clamp(27px,3.7vw,40px);line-height:1.14;font-weight:700;letter-spac
   -webkit-mask-image:radial-gradient(80% 80% at 50% 40%,#000,transparent 76%);
   mask-image:radial-gradient(80% 80% at 50% 40%,#000,transparent 76%)}
 .cta > *{position:relative}
-.cta .kicker{color:rgba(255,255,255,.9)}
+.cta .kicker{color:#fff}
 .cta .kicker::before{background:rgba(255,255,255,.65)}
 .cta h2{color:#fff;max-width:20ch;margin-inline:auto}
-.cta p{margin:16px auto 0;max-width:56ch;font-size:15.5px;line-height:1.64;color:rgba(255,255,255,.88)}
-.cta .btn{background:#fff;color:var(--grad-1);margin-top:30px;
+.cta p{margin:16px auto 0;max-width:56ch;font-size:15.5px;line-height:1.64;color:#fff}
+.cta .btn{background:#fff;color:#0A6892;margin-top:30px;
   box-shadow:0 10px 30px -8px rgba(0,0,0,.35)}
-.cta .btn:hover{background:#fff;color:#4E3EE4;box-shadow:0 14px 38px -10px rgba(0,0,0,.42)}
-.cta .fine{margin-top:18px;font-size:12.5px;color:rgba(255,255,255,.74)}
+.cta .btn:hover{background:#fff;color:#085877;box-shadow:0 14px 38px -10px rgba(0,0,0,.42)}
+.cta .fine{margin-top:18px;font-size:12.5px;color:#fff}
 
 /* ── Footer ────────────────────────────────────────────────────────────── */
 footer{border-top:1px solid var(--border);padding:34px 0 44px;margin-top:clamp(60px,8vw,96px)}
 .foot-in{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.foot-in .logo{font-size:14.5px}
+.foot-in .logo svg{height:21px}
 .foot-links{margin-left:auto;display:flex;gap:18px;flex-wrap:wrap}
 .foot-links a{font-size:13px;color:var(--text-3);transition:color .14s}
 .foot-links a:hover{color:var(--text)}
@@ -411,8 +412,8 @@ footer{border-top:1px solid var(--border);padding:34px 0 44px;margin-top:clamp(6
 <header class="nav" id="nav">
   <div class="shell nav-in">
     <a href="/" class="logo">
-      <span class="mark">E</span>
-      <span>efforti<small>outreach</small></span>
+      <svg viewBox="0 0 129.92 29.91" fill="currentColor" fill-rule="evenodd" role="img" aria-label="Efforti"><path d="M10.47 0.41L8.47 1.18L5.47 3.07L3.14 5.45L1.33 8.45L0.08 12.45L0.0 16.45L0.28 18.45L1.37 21.45L1.92 22.45L3.19 24.45L5.47 26.79L8.47 28.67L11.47 29.75L16.47 29.91L17.03 29.45L17.03 28.45L17.02 19.45L16.82 18.45L16.47 17.89L15.47 17.83L14.47 18.24L14.39 18.45L14.16 19.45L14.09 26.45L13.47 26.98L12.47 26.94L9.47 25.89L6.47 23.72L4.09 20.45L3.38 18.45L3.35 17.45L4.47 17.21L28.47 17.2L29.47 17.06L29.93 16.45L29.85 12.45L29.32 11.45L28.96 9.45L27.98 7.45L27.17 6.45L26.76 5.45L24.47 3.16L22.47 1.85L21.47 1.23L19.47 0.45L17.47 0.01L12.47 0.01L10.47 0.41Z M64.47 0.14L62.47 1.31L61.05 3.45L60.88 10.45L60.51 11.45L57.47 11.86L57.07 12.45L57.14 13.45L57.47 13.78L60.47 14.04L60.85 14.45L60.99 29.45L61.47 29.87L62.47 29.85L63.13 29.45L63.27 28.45L63.34 14.45L64.47 13.95L69.47 13.95L70.47 13.98L70.98 14.45L71.15 29.45L71.47 29.76L72.47 29.87L73.47 29.64L73.69 29.45L73.82 28.45L73.9 14.45L74.47 14.0L76.47 13.95L77.47 13.74L77.76 13.45L77.82 12.45L77.47 11.93L76.47 11.62L74.34 11.45L73.86 10.45L73.89 5.45L74.04 4.45L74.53 3.45L75.47 2.73L77.47 2.16L77.81 1.45L77.69 0.45L76.47 0.0L74.47 0.28L73.47 0.86L71.99 2.45L71.09 4.45L71.02 10.45L70.47 11.58L64.47 11.62L64.05 11.45L63.3 10.45L63.42 5.45L64.09 3.45L64.47 3.02L65.47 2.55L66.47 2.44L67.34 1.45L67.21 0.45L66.47 0.01L64.47 0.14Z M115.47 0.11L115.1 0.45L115.04 1.45L115.01 10.45L114.62 11.45L113.47 12.07L113.25 12.45L113.31 13.45L114.47 13.99L114.98 14.45L115.11 26.45L115.47 27.45L116.1 28.45L117.56 29.45L118.47 29.79L119.47 29.86L121.47 29.68L122.47 29.09L122.84 28.45L122.73 27.45L122.47 27.16L119.47 27.29L118.47 26.92L118.05 26.45L117.79 25.45L117.83 14.45L118.47 13.99L121.47 13.95L122.47 13.75L122.75 13.45L122.8 12.45L122.47 11.91L121.47 11.62L118.31 11.45L117.79 10.45L117.68 0.45L116.47 0.0L115.47 0.11Z M127.47 0.2L126.27 1.45L126.22 2.45L127.47 3.82L128.47 3.87L129.47 3.24L129.92 2.45L129.9 1.45L129.47 0.79L128.47 0.13L127.47 0.2Z M11.47 3.18L10.47 3.72L9.47 3.98L7.47 5.28L5.35 7.45L4.06 9.45L3.03 12.45L2.97 13.45L3.17 14.45L3.47 14.72L25.47 14.75L26.47 14.67L26.71 14.45L26.9 13.45L26.85 12.45L26.01 10.45L25.79 9.45L23.64 6.45L22.47 5.4L20.47 4.02L17.47 2.94L14.47 2.8L11.47 3.18Z M14.47 10.03L14.05 10.45L13.77 11.45L13.87 12.45L14.47 13.22L15.47 14.03L16.47 13.92L17.62 12.45L17.82 11.45L17.14 10.45L16.47 9.88L15.47 9.73L14.47 10.03Z M46.47 11.24L44.47 11.92L42.47 13.22L41.3 14.45L40.15 16.45L39.45 19.45L39.31 20.45L39.44 21.45L39.79 22.45L40.09 24.45L41.18 26.45L42.47 27.83L44.47 29.05L46.47 29.76L50.47 29.74L52.47 29.05L54.47 27.85L55.73 26.45L55.47 25.31L54.47 24.69L53.47 25.12L51.47 26.77L49.47 27.26L47.47 27.3L45.47 26.88L44.47 26.08L43.02 24.45L42.23 22.45L42.31 21.45L42.47 21.28L43.47 21.13L55.47 21.13L56.47 20.73L56.67 20.45L56.62 18.45L55.69 15.45L54.11 13.45L52.47 12.08L49.47 11.06L47.47 11.02L46.47 11.24Z M85.47 11.13L82.47 12.09L80.81 13.45L79.02 15.45L78.72 16.45L78.15 17.45L77.97 18.45L77.9 21.45L78.14 23.45L78.7 24.45L78.99 25.45L79.47 26.06L80.72 27.45L82.47 28.83L84.47 29.63L85.47 29.8L87.47 29.87L89.47 29.67L91.47 28.89L92.12 28.45L93.47 27.33L95.03 25.45L95.93 23.45L96.27 21.45L96.26 19.45L95.92 17.45L95.0 15.45L94.47 14.78L93.22 13.45L91.47 12.02L88.47 11.1L86.47 10.99L85.47 11.13Z M100.47 11.75L100.02 12.45L100.03 28.45L100.14 29.45L100.47 29.74L101.47 29.87L102.47 29.77L102.8 29.45L102.93 19.45L103.13 17.45L104.47 15.38L106.47 14.18L108.47 13.99L109.47 13.65L109.65 13.45L109.67 12.45L109.47 12.15L108.47 11.59L106.47 11.7L105.47 11.96L103.47 13.74L103.15 13.45L102.92 12.45L102.47 11.73L101.47 11.58L100.47 11.75Z M127.47 11.48L126.92 12.45L126.86 28.45L126.96 29.45L127.47 29.87L128.47 29.86L129.14 29.45L129.28 28.45L129.39 12.45L128.47 11.48L127.47 11.48Z M45.47 14.0L43.81 15.45L43.02 16.45L42.47 17.78L42.31 18.45L42.47 18.64L43.47 18.9L52.47 18.9L53.47 18.76L53.78 18.45L53.7 17.45L52.47 15.47L50.47 13.95L48.47 13.76L45.47 14.0Z M84.47 13.95L82.18 15.45L80.98 17.45L80.56 20.45L80.97 23.45L82.47 25.77L84.47 26.98L87.47 27.36L89.47 27.02L91.47 25.91L92.74 24.45L93.23 22.45L93.77 21.45L93.76 19.45L93.22 18.45L92.71 16.45L91.47 15.07L89.47 13.93L86.47 13.76L84.47 13.95Z"/></svg>
+      <span class="sfx">Outreach</span>
     </a>
     <nav class="nav-links">
       <a href="#workflow">Workflow</a>
@@ -747,7 +748,7 @@ footer{border-top:1px solid var(--border);padding:34px 0 44px;margin-top:clamp(6
 <!-- ══ Footer ══════════════════════════════════════════════════════════ -->
 <footer>
   <div class="shell foot-in">
-    <a href="/" class="logo"><span class="mark">E</span><span>efforti<small>outreach</small></span></a>
+    <a href="/" class="logo"><svg viewBox="0 0 129.92 29.91" fill="currentColor" fill-rule="evenodd" role="img" aria-label="Efforti"><path d="M10.47 0.41L8.47 1.18L5.47 3.07L3.14 5.45L1.33 8.45L0.08 12.45L0.0 16.45L0.28 18.45L1.37 21.45L1.92 22.45L3.19 24.45L5.47 26.79L8.47 28.67L11.47 29.75L16.47 29.91L17.03 29.45L17.03 28.45L17.02 19.45L16.82 18.45L16.47 17.89L15.47 17.83L14.47 18.24L14.39 18.45L14.16 19.45L14.09 26.45L13.47 26.98L12.47 26.94L9.47 25.89L6.47 23.72L4.09 20.45L3.38 18.45L3.35 17.45L4.47 17.21L28.47 17.2L29.47 17.06L29.93 16.45L29.85 12.45L29.32 11.45L28.96 9.45L27.98 7.45L27.17 6.45L26.76 5.45L24.47 3.16L22.47 1.85L21.47 1.23L19.47 0.45L17.47 0.01L12.47 0.01L10.47 0.41Z M64.47 0.14L62.47 1.31L61.05 3.45L60.88 10.45L60.51 11.45L57.47 11.86L57.07 12.45L57.14 13.45L57.47 13.78L60.47 14.04L60.85 14.45L60.99 29.45L61.47 29.87L62.47 29.85L63.13 29.45L63.27 28.45L63.34 14.45L64.47 13.95L69.47 13.95L70.47 13.98L70.98 14.45L71.15 29.45L71.47 29.76L72.47 29.87L73.47 29.64L73.69 29.45L73.82 28.45L73.9 14.45L74.47 14.0L76.47 13.95L77.47 13.74L77.76 13.45L77.82 12.45L77.47 11.93L76.47 11.62L74.34 11.45L73.86 10.45L73.89 5.45L74.04 4.45L74.53 3.45L75.47 2.73L77.47 2.16L77.81 1.45L77.69 0.45L76.47 0.0L74.47 0.28L73.47 0.86L71.99 2.45L71.09 4.45L71.02 10.45L70.47 11.58L64.47 11.62L64.05 11.45L63.3 10.45L63.42 5.45L64.09 3.45L64.47 3.02L65.47 2.55L66.47 2.44L67.34 1.45L67.21 0.45L66.47 0.01L64.47 0.14Z M115.47 0.11L115.1 0.45L115.04 1.45L115.01 10.45L114.62 11.45L113.47 12.07L113.25 12.45L113.31 13.45L114.47 13.99L114.98 14.45L115.11 26.45L115.47 27.45L116.1 28.45L117.56 29.45L118.47 29.79L119.47 29.86L121.47 29.68L122.47 29.09L122.84 28.45L122.73 27.45L122.47 27.16L119.47 27.29L118.47 26.92L118.05 26.45L117.79 25.45L117.83 14.45L118.47 13.99L121.47 13.95L122.47 13.75L122.75 13.45L122.8 12.45L122.47 11.91L121.47 11.62L118.31 11.45L117.79 10.45L117.68 0.45L116.47 0.0L115.47 0.11Z M127.47 0.2L126.27 1.45L126.22 2.45L127.47 3.82L128.47 3.87L129.47 3.24L129.92 2.45L129.9 1.45L129.47 0.79L128.47 0.13L127.47 0.2Z M11.47 3.18L10.47 3.72L9.47 3.98L7.47 5.28L5.35 7.45L4.06 9.45L3.03 12.45L2.97 13.45L3.17 14.45L3.47 14.72L25.47 14.75L26.47 14.67L26.71 14.45L26.9 13.45L26.85 12.45L26.01 10.45L25.79 9.45L23.64 6.45L22.47 5.4L20.47 4.02L17.47 2.94L14.47 2.8L11.47 3.18Z M14.47 10.03L14.05 10.45L13.77 11.45L13.87 12.45L14.47 13.22L15.47 14.03L16.47 13.92L17.62 12.45L17.82 11.45L17.14 10.45L16.47 9.88L15.47 9.73L14.47 10.03Z M46.47 11.24L44.47 11.92L42.47 13.22L41.3 14.45L40.15 16.45L39.45 19.45L39.31 20.45L39.44 21.45L39.79 22.45L40.09 24.45L41.18 26.45L42.47 27.83L44.47 29.05L46.47 29.76L50.47 29.74L52.47 29.05L54.47 27.85L55.73 26.45L55.47 25.31L54.47 24.69L53.47 25.12L51.47 26.77L49.47 27.26L47.47 27.3L45.47 26.88L44.47 26.08L43.02 24.45L42.23 22.45L42.31 21.45L42.47 21.28L43.47 21.13L55.47 21.13L56.47 20.73L56.67 20.45L56.62 18.45L55.69 15.45L54.11 13.45L52.47 12.08L49.47 11.06L47.47 11.02L46.47 11.24Z M85.47 11.13L82.47 12.09L80.81 13.45L79.02 15.45L78.72 16.45L78.15 17.45L77.97 18.45L77.9 21.45L78.14 23.45L78.7 24.45L78.99 25.45L79.47 26.06L80.72 27.45L82.47 28.83L84.47 29.63L85.47 29.8L87.47 29.87L89.47 29.67L91.47 28.89L92.12 28.45L93.47 27.33L95.03 25.45L95.93 23.45L96.27 21.45L96.26 19.45L95.92 17.45L95.0 15.45L94.47 14.78L93.22 13.45L91.47 12.02L88.47 11.1L86.47 10.99L85.47 11.13Z M100.47 11.75L100.02 12.45L100.03 28.45L100.14 29.45L100.47 29.74L101.47 29.87L102.47 29.77L102.8 29.45L102.93 19.45L103.13 17.45L104.47 15.38L106.47 14.18L108.47 13.99L109.47 13.65L109.65 13.45L109.67 12.45L109.47 12.15L108.47 11.59L106.47 11.7L105.47 11.96L103.47 13.74L103.15 13.45L102.92 12.45L102.47 11.73L101.47 11.58L100.47 11.75Z M127.47 11.48L126.92 12.45L126.86 28.45L126.96 29.45L127.47 29.87L128.47 29.86L129.14 29.45L129.28 28.45L129.39 12.45L128.47 11.48L127.47 11.48Z M45.47 14.0L43.81 15.45L43.02 16.45L42.47 17.78L42.31 18.45L42.47 18.64L43.47 18.9L52.47 18.9L53.47 18.76L53.78 18.45L53.7 17.45L52.47 15.47L50.47 13.95L48.47 13.76L45.47 14.0Z M84.47 13.95L82.18 15.45L80.98 17.45L80.56 20.45L80.97 23.45L82.47 25.77L84.47 26.98L87.47 27.36L89.47 27.02L91.47 25.91L92.74 24.45L93.23 22.45L93.77 21.45L93.76 19.45L93.22 18.45L92.71 16.45L91.47 15.07L89.47 13.93L86.47 13.76L84.47 13.95Z"/></svg><span class="sfx">Outreach</span></a>
     <nav class="foot-links">
       <a href="/dashboard">Dashboard</a>
       <a href="/leads">Leads</a>

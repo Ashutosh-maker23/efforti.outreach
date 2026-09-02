@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime, timezone
 
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
-                        String, Text, create_engine)
+                        String, Text, UniqueConstraint, create_engine)
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 Base = declarative_base()
@@ -199,6 +199,40 @@ class Message(Base):
     # user-agent of the last fetch so you can SEE what hit the pixel.
     prefetch_count = Column(Integer, default=0)
     open_agent = Column(String, default="")
+
+
+class RevealSkip(Base):
+    """A reveal we already PAID for and threw away — so we never pay for it twice.
+
+    THE LEAK THIS CLOSES: a revealed contact that fails the ICP / niche / HQ gate
+    is discarded and never stored. Nothing remembers it. The next pull runs the
+    same search, sees the same person, and spends the credit AGAIN — and again on
+    every run after that. Across 25 logged pulls, 1,028 of 1,923 credits went on
+    rejects, and a large part of that is the same people being re-bought.
+
+    Two kinds of memory, because a reject is usually a property of the COMPANY,
+    not the person:
+
+      scope="person"   apollo_id of someone already revealed and rejected.
+                       Skipped free on every future pull.
+      scope="company"  normalised company name judged off-niche / blocked /
+                       wrong-HQ. Every candidate at that company is skipped
+                       before paying, this run and every later one — which is
+                       what stops us buying four people at one off-niche firm.
+
+    `key` holds the apollo_id or the normalised name; unique per (scope, key).
+    """
+    __tablename__ = "reveal_skips"
+    id = Column(Integer, primary_key=True)
+    scope = Column(String, index=True, default="person")   # person | company
+    key = Column(String, index=True, nullable=False)
+    reason = Column(String, default="")        # why it was rejected
+    company = Column(String, default="")       # readable name, for the audit
+    hits = Column(Integer, default=0)          # times this saved a credit later
+    created_at = Column(DateTime, default=utcnow)
+    __table_args__ = (
+        UniqueConstraint("scope", "key", name="uq_reveal_skip_scope_key"),
+    )
 
 
 class TrackHit(Base):

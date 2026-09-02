@@ -43,7 +43,7 @@ from .icp import (NON_ROLE_START_RE, STALE_TITLE_RE, build_niche,
                   parse_band, prescreen_org,
                   score_lead, title_tier)
 from .importer import normalize_domain, verify_email
-from .models import Lead, Suppression, log
+from .models import Lead, RevealSkip, Suppression, log
 
 # Legal-entity suffixes stripped when normalising a company name for identity
 # matching, so "BillMart FinTech Pvt Ltd" and "BillMart FinTech" collapse the
@@ -290,55 +290,88 @@ INDUSTRY_OPTIONS = [
                "contractor", "real estate development", "building construction"]},
     {"slug": "it_services",
      "label": "IT Services / Consulting / Outsourcing (GCC)",
+     # NAICS is the ONLY hard industry filter the people-search offers, and it is
+     # what keeps off-niche companies out of the results entirely — an off-niche
+     # company that never appears can never cost a reveal credit. Previously only
+     # the two focus verticals carried codes, so every other pick fell back to
+     # keyword tags and leaked: a 09-02 run rejected 59 of 227 paid reveals as
+     # "outside selected niche", none of them caught before paying.
+     #   5415 Computer Systems Design & Related Services
+     #   5416 Management/Scientific/Technical Consulting
+     #   5614 Business Support Services (BPO / offshore delivery)
+     "naics": ["5415", "5416", "5614"],
      "tags": ["it services", "outsourcing", "offshoring", "consulting",
               "managed services", "system integrator", "digital transformation",
               "global capability center", "captive"],
      "hints": ["information technology", "outsourcing", "offshoring",
                "consulting", "information services", "staffing"]},
     {"slug": "software_saas", "label": "Software / SaaS Product",
+     #   5112 Software Publishers    5182 Data Processing / Hosting
+     "naics": ["5112", "5182"],
      "tags": ["saas", "software", "enterprise software", "b2b software",
               "platform"],
      "hints": ["computer software", "software", "information technology", "saas"]},
     {"slug": "internet_ecommerce",
      "label": "Internet / E-commerce / Marketplaces",
+     #   4541 Electronic Shopping & Mail-Order   519 Web portals / info services
+     "naics": ["4541", "519"],
      "tags": ["internet", "e-commerce", "marketplace", "consumer internet"],
      "hints": ["internet", "e-commerce", "ecommerce", "marketplace"]},
     {"slug": "bfsi",
      "label": "BFSI — Banking / Financial Services / Insurance / Fintech",
+     #   52 Finance & Insurance (522 credit, 523 securities, 524 insurance)
+     "naics": ["52"],
      "tags": ["fintech", "financial services", "payments", "banking",
               "insurance", "lending", "wealth management"],
      "hints": ["financial services", "banking", "insurance", "fintech",
                "payment", "investment", "capital markets", "venture capital"]},
     {"slug": "semiconductors_electronics",
      "label": "Semiconductors / Electronics / Hardware",
+     #   3341 Computer & Peripheral Equipment   3344 Semiconductor & Electronic
+     #   3345 Navigational/Measuring/Control Instruments
+     "naics": ["3341", "3344", "3345"],
      "tags": ["semiconductor", "electronics", "embedded", "vlsi", "iot",
               "hardware"],
      "hints": ["semiconductor", "electronic", "electrical", "computer hardware",
                "consumer electronics", "nanotechnology"]},
     {"slug": "engineering_manufacturing",
      "label": "Engineering / Industrial / Manufacturing",
+     #   332/333 Fabricated Metal & Machinery   3364 Aerospace   5413 Eng. svcs
+     "naics": ["332", "333", "3364", "5413"],
      "tags": ["manufacturing", "industrial", "engineering services",
               "automation", "machinery", "product engineering"],
      "hints": ["mechanical or industrial engineering", "industrial automation",
                "machinery", "manufactur", "electrical/electronic manufacturing"]},
     {"slug": "telecom", "label": "Telecommunications / Networking",
+     #   517 Telecommunications   3342 Communications Equipment
+     "naics": ["517", "3342"],
      "tags": ["telecom", "telecommunications", "5g", "networking", "wireless"],
      "hints": ["telecommunications", "wireless", "networking"]},
     {"slug": "cybersecurity", "label": "Cybersecurity / Information Security",
+     #   5415 Computer Systems Design (where security firms are filed)
+     "naics": ["5415"],
      "tags": ["cybersecurity", "information security", "infosec", "security"],
      "hints": ["security", "cyber"]},
     {"slug": "data_ai", "label": "Data / Analytics / AI-ML",
+     #   5415 Computer Systems Design   5182 Data Processing/Hosting
+     #   54171 R&D in Physical/Engineering/Life Sciences
+     "naics": ["5415", "5182", "54171"],
      "tags": ["data analytics", "big data", "artificial intelligence",
               "machine learning", "analytics", "data platform"],
      "hints": ["computer software", "information technology", "internet",
                "analytics"]},
     {"slug": "healthtech_pharma", "label": "HealthTech / Pharma / Biotech (GCC)",
+     #   3254 Pharmaceutical & Medicine   3391 Medical Equipment & Supplies
+     #   54171 R&D in Physical/Engineering/Life Sciences
+     "naics": ["3254", "3391", "54171"],
      "tags": ["healthtech", "digital health", "pharma", "biotech",
               "life sciences", "medical devices"],
      "hints": ["pharmaceutical", "biotechnology", "medical device",
                "health tech", "digital health"]},
     {"slug": "automotive_mobility",
      "label": "Automotive / EV / Mobility Engineering",
+     #   3361 Motor Vehicle Mfg   3363 Motor Vehicle Parts   5413 Eng. services
+     "naics": ["3361", "3363", "5413"],
      "tags": ["automotive", "ev", "electric vehicle", "mobility", "autonomous",
               "adas"],
      "hints": ["automotive", "mechanical or industrial engineering"]},
@@ -900,6 +933,7 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
              "skipped_niche_prereveal": 0, "skipped_title_prereveal": 0,
              "skipped_brand_full_prereveal": 0, "skipped_scope_prereveal": 0,
              "skipped_known": 0, "skipped_identity": 0,
+             "skipped_known_reject": 0, "skipped_company_reject": 0,
              "icp_reject_reasons": {}, "exhausted": False,
              "pages": 0, "stop_reason": "target reached"}
     if not os.environ.get("APOLLO_API_KEY"):
@@ -937,6 +971,35 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
             db_name_counts[n] = db_name_counts.get(n, 0) + 1
     pre_by_name = {}
     brand_domains = {}
+
+    # ---- reject memory: never pay twice for the same no ---------------------
+    # Loaded once per run, updated in memory as we go, flushed at the end. A
+    # person we already revealed and discarded, and a company we already judged
+    # off-niche, are both skipped BEFORE the reveal — this run and every future
+    # one (see models.RevealSkip).
+    skip_people = set()
+    skip_companies = {}
+    for r in db.query(RevealSkip).all():
+        if r.scope == "company":
+            skip_companies[r.key] = r.reason
+        else:
+            skip_people.add(r.key)
+    new_skips = {}          # (scope, key) -> (reason, readable company name)
+    skip_hits = {}          # (scope, key) -> how many credits it saved this run
+
+    def _remember_reject(reason: str, apid: str, company: str, org_level: bool):
+        """Record a paid-for reject so the next run gets it for free. `org_level`
+        marks reasons that belong to the COMPANY (off-niche, blocked industry,
+        wrong HQ) rather than the person — those block the whole firm, which is
+        what stops us buying several people at one bad company."""
+        if apid:
+            skip_people.add(apid)
+            new_skips[("person", apid)] = (reason, company)
+        if org_level:
+            n = _norm_company(company)
+            if n:
+                skip_companies[n] = reason
+                new_skips[("company", n)] = (reason, company)
 
     def _consider(enriched: dict) -> bool:
         """Store one REVEALED person ONLY if the lead will actually be SENT — it
@@ -979,14 +1042,22 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         tally = stats["icp_reject_reasons"]
 
         # KEEP only a lead that will be sent; DISCARD (count) anything else.
+        # Every discard below is REMEMBERED so the credit is never spent again.
         if not loc_ok:
             stats["skipped_location"] += 1
             tally["wrong location"] = tally.get("wrong location", 0) + 1
+            _remember_reject("wrong HQ", apid, f["company"], True)
             return False
         if icp["verdict"] != "pass":
             stats["skipped_icp"] += 1
             why = (icp["reasons"][0] if icp["reasons"] else "?").split(":")[0]
             tally[why] = tally.get(why, 0) + 1
+            # "outside selected niche", "blocked industry", "public company" are
+            # verdicts about the COMPANY — block the whole firm. A score-bar miss
+            # is about the person, so only that person is remembered.
+            _remember_reject(why, apid, f["company"],
+                             "niche" in why or "industry" in why
+                             or "company" in why)
             return False
         if not (domain in brand_domains or len(brand_domains) < brands):
             stats["skipped_scope"] += 1
@@ -1045,7 +1116,24 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
                 if pid in known_ids:
                     stats["skipped_known"] += 1
                     continue
+                # FREE: we already paid to reveal this exact person on an earlier
+                # run and threw them away. Never buy the same no twice.
+                if pid in skip_people:
+                    stats["skipped_known_reject"] += 1
+                    skip_hits[("person", pid)] = \
+                        skip_hits.get(("person", pid), 0) + 1
+                    continue
                 pre_org = p.get("organization") or {}
+                # FREE: this company was already judged off-niche / blocked /
+                # wrong-HQ after a paid reveal. The verdict was about the FIRM, so
+                # it holds for everyone there — this is what stops us buying four
+                # people at one company we have already rejected.
+                _cname = _norm_company(pre_org.get("name"))
+                if _cname and _cname in skip_companies:
+                    stats["skipped_company_reject"] += 1
+                    skip_hits[("company", _cname)] = \
+                        skip_hits.get(("company", _cname), 0) + 1
+                    continue
                 ikey = identity_key(p.get("first_name"), pre_org.get("name"))
                 if ikey is not None and ikey in ident_index:
                     stats["skipped_identity"] += 1
@@ -1148,6 +1236,33 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
     except Exception as e:
         log(db, "error", f"apollo pull failed: {e}")
 
+    # Persist the reject memory. Written even when the run died mid-way (we are
+    # past the try/except), because the credits were spent either way and the
+    # whole point is that the next run does not spend them again.
+    for (scope, key), (reason, company) in new_skips.items():
+        try:
+            row = (db.query(RevealSkip)
+                   .filter(RevealSkip.scope == scope,
+                           RevealSkip.key == key).first())
+            if row is None:
+                db.add(RevealSkip(scope=scope, key=key, reason=reason,
+                                  company=(company or "")[:200]))
+            else:
+                row.reason = reason
+        except Exception:
+            continue
+    for (scope, key), n in skip_hits.items():
+        row = (db.query(RevealSkip)
+               .filter(RevealSkip.scope == scope, RevealSkip.key == key).first())
+        if row is not None:
+            row.hits = (row.hits or 0) + n
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    stats["credits_saved_by_memory"] = (stats["skipped_known_reject"]
+                                        + stats["skipped_company_reject"])
     stats["brands_filled"] = len(brand_domains)
     off_icp = (stats["skipped_icp"] + stats["skipped_prescreen"]
                + stats["skipped_niche_prereveal"])
@@ -1166,6 +1281,9 @@ def pull_apollo(db, titles=None, size_ranges=None, keywords=None, locations=None
         + (f"{stats['skipped_title_prereveal']} stale/non-role titles skipped "
            f"BEFORE reveal (credits saved) · "
            if stats['skipped_title_prereveal'] else "")
+        + (f"{stats['credits_saved_by_memory']} already-rejected skipped BEFORE "
+           f"reveal ({stats['skipped_company_reject']} at companies we already "
+           f"ruled out) · " if stats['credits_saved_by_memory'] else "")
         + f"{stats['fetched']} scanned · "
         f"{off_icp} off-niche discarded ({stats['skipped_prescreen'] + stats['skipped_niche_prereveal']} pre-reveal"
         + (f"; top: {top_reasons}" if top_reasons else "") + ") · "
